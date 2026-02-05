@@ -156,6 +156,13 @@ Output:
 
 * derived/sub-2062/ses-1/sub-2062_ses-1_all_metrics.mat
 
+
+## notes on matlab material folder
+after obtaining all the necessary metrices in one's derived folder, download that folder to local then run "new_compile_whole_python_v2.m" 
+Please make sure the "+myReports" folder is at the same directory as the "new_compile_whole_python_v2.m", "+myReports" contains the template word document where all the placeholders exist and can be changed. 
+To modify the layout of the file, you need to open "matlab_material/+myReports/@SessionReport/resources/templates/docx/default.dotx". Change the place holder or any layout elements, then save it as "word template*"!!!
+
+
 ---
 
 ## Notes on channels (1-based vs 0-based)

@@ -4,3 +4,6 @@ outputs/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+logs/
+scripts/__pycache__/
+src/__pycache__/

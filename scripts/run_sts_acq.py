@@ -225,6 +225,7 @@ def main():
     ap.add_argument("--ecg_ch", type=int, required=True, help="ECG channel number")
     ap.add_argument("--bp_ch", type=int, required=True, help="BP channel number")
     ap.add_argument("--one_based", action="store_true", help="Interpret channel numbers as 1-based")
+    ap.add_argument("--ecg_method", default="neurokit", help="NeuroKit ECG processing method")
 
     ap.add_argument("--bp_prominence", type=float, default=20.0)
     ap.add_argument("--cal_thr", type=float, default=0.1)
@@ -335,10 +336,15 @@ def main():
 
 
     # ---- ECG/HRV
-    signals, info = nk.ecg_process(ecg, sampling_rate=fs)
+    # Keep peak detection method fixed (neurokit); only vary cleaning method.
+    ecg_clean = nk.ecg_clean(ecg, sampling_rate=fs, method=args.ecg_method)
+    _, info = nk.ecg_peaks(ecg_clean, sampling_rate=fs, method="neurokit")
     rpeaks = np.asarray(info.get("ECG_R_Peaks", []), dtype=int)
 
-    hr_ts = np.asarray(signals["ECG_Rate"], dtype=float)   # bpm, sample-aligned
+    if len(rpeaks) >= 2:
+        hr_ts = nk.signal_rate(rpeaks, sampling_rate=fs, desired_length=len(ecg))
+    else:
+        hr_ts = np.full(len(ecg), np.nan)
     t_hr = np.arange(len(hr_ts)) / fs
 
     

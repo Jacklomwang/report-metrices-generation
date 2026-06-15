@@ -223,6 +223,7 @@ def main():
 
     ap.add_argument("--one_based", action="store_true", help="Interpret channel numbers as 1-based")
     ap.add_argument("--ecg_ch", type=int, default=4, help="ECG channel number (default 4)")
+    ap.add_argument("--ecg_method", default="neurokit", help="NeuroKit ECG processing method")
     ap.add_argument("--ppg_ch", type=int, default=5, help="PPG channel number (default 5)")
     ap.add_argument("--force_ppg", action="store_true", help="Always use PPG for HR (ignore ECG)")
     ap.add_argument("--fallback_ppg", action="store_true", help="If ECG HR looks bad, fall back to PPG")
@@ -284,9 +285,14 @@ def main():
     ppg = None  # only set if used
 
     if not args.force_ppg:
-        signals_ecg, info_ecg = nk.ecg_process(ecg, sampling_rate=fs)
-        hr_ecg = np.asarray(signals_ecg["ECG_Rate"], dtype=float)
+        # Keep peak detection method fixed (neurokit); only vary cleaning method.
+        ecg_clean = nk.ecg_clean(ecg, sampling_rate=fs, method=args.ecg_method)
+        _, info_ecg = nk.ecg_peaks(ecg_clean, sampling_rate=fs, method="neurokit")
         rpeaks = np.asarray(info_ecg.get("ECG_R_Peaks", []), dtype=int)
+        if len(rpeaks) >= 2:
+            hr_ecg = nk.signal_rate(rpeaks, sampling_rate=fs, desired_length=len(ecg))
+        else:
+            hr_ecg = np.full(len(ecg), np.nan)
 
         if args.fallback_ppg and (not ecg_hr_quality_ok(hr_ecg, rpeaks, fs)):
             print("[WARN] ECG HR quality looks bad -> falling back to PPG.")

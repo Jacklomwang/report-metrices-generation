@@ -1,0 +1,611 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import base64
+import html
+import json
+import math
+import mimetypes
+import sys
+from datetime import datetime
+from pathlib import Path
+
+
+TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "html_report"
+TEMPLATE_PATH = TEMPLATE_DIR / "participant_report_template.html"
+REPORT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = REPORT_ROOT / "src"
+
+
+NAV_ITEMS = [
+    ("overview", "01", "Overview"),
+    ("cognitive", "02", "Cognitive testing"),
+    ("spirometry", "03", "Spirometry"),
+    ("cardiovascular", "04", "Resting cardiovascular"),
+    ("autonomic", "05", "Autonomic overview"),
+    ("sts", "06", "Supine to stand"),
+    ("valsalva", "07", "Valsalva"),
+    ("deep-breathing", "08", "Deep breathing"),
+    ("glossary", "09", "Glossary & references"),
+]
+
+
+def _load_bundle(bundle_path: Path) -> dict:
+    with open(bundle_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _load_subject_metadata(sub_id: str, ses_id: str) -> dict:
+    try:
+        if str(SRC_ROOT) not in sys.path:
+            sys.path.insert(0, str(SRC_ROOT))
+        import subject_metadata as local_subject_metadata  # type: ignore
+
+        return local_subject_metadata.build_subject_metadata(
+            participant=sub_id,
+            session=ses_id,
+            task="report",
+        )
+    except Exception as exc:
+        return {"_load_error": str(exc)}
+
+
+def _escape(text) -> str:
+    return html.escape(str(text))
+
+
+def _is_missing(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float):
+        return math.isnan(value) or math.isinf(value)
+    return False
+
+
+def _as_float(value) -> float | None:
+    if _is_missing(value):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _format_number(value, digits: int = 2, signed: bool = False, missing: str = "—") -> str:
+    if _is_missing(value):
+        return missing
+    try:
+        if isinstance(value, bool):
+            return "Yes" if value else "No"
+        if isinstance(value, int):
+            return f"{value:+d}" if signed and value > 0 else str(value)
+        num = float(value)
+        if signed:
+            return f"{num:+.{digits}f}"
+        return f"{num:.{digits}f}"
+    except Exception:
+        return _escape(value)
+
+
+def _format_text(value, missing: str = "—") -> str:
+    if value is None:
+        return missing
+    text = str(value).strip()
+    return text if text else missing
+
+
+def _subject_label(sub_id: str) -> str:
+    return f"Subject {sub_id.replace('sub-', '')}"
+
+
+def _session_plain(ses_id: str) -> str:
+    return ses_id.replace("ses-", "")
+
+
+def _task_section(bundle: dict, key: str) -> dict:
+    section = bundle.get("metrics_by_task", {}).get(key, {})
+    return section if isinstance(section, dict) else {}
+
+
+def _task_present(bundle: dict, key: str) -> bool:
+    section = _task_section(bundle, key)
+    return bool(section) and section.get("present", 1) != 0
+
+
+def _missing_tasks(bundle: dict) -> list[str]:
+    labels = {
+        "rest": "rest",
+        "sts": "sts",
+        "valsalva": "valsalva",
+        "breathing": "breathing",
+        "spirometry": "spirometry",
+    }
+    return [label for key, label in labels.items() if not _task_present(bundle, key)]
+
+
+def _metric_card(label: str, value, unit: str = "", note: str = "", digits: int = 2, signed: bool = False) -> str:
+    value_str = _format_number(value, digits=digits, signed=signed)
+    unit_html = f' <span class="metric-unit">{_escape(unit)}</span>' if unit else ""
+    note_html = f'<div class="metric-note">{_escape(note)}</div>' if note else ""
+    return (
+        '<div class="card metric">'
+        f'<span class="metric-label">{_escape(label)}</span>'
+        f'<div class="metric-value">{value_str}{unit_html}</div>'
+        f'{note_html}'
+        '</div>'
+    )
+
+
+def _notice(label: str, text: str, kind: str = "danger") -> str:
+    extra = " info" if kind == "info" else ""
+    return f'<div class="notice{extra}"><strong>{_escape(label)}</strong><span>{_escape(text)}</span></div>'
+
+
+def _chapter_row(number: str, title: str, subtitle: str, status: str, missing: bool = False) -> str:
+    status_class = "status missing" if missing else "status"
+    return (
+        '<div class="chapter-row">'
+        f'<span>{_escape(number)}</span>'
+        '<div>'
+        f'<strong>{_escape(title)}</strong>'
+        f'<small>{_escape(subtitle)}</small>'
+        '</div>'
+        f'<b class="{status_class}">{_escape(status)}</b>'
+        '</div>'
+    )
+
+
+def _page(section_id: str, eyebrow: str, title: str, page_number: str, lead: str, body_html: str, footer_left: str) -> str:
+    return (
+        f'<section class="report-page" id="{_escape(section_id)}">'
+        '<header class="page-header">'
+        '<div>'
+        f'<span class="eyebrow">{_escape(eyebrow)}</span>'
+        f'<h2>{_escape(title)}</h2>'
+        '</div>'
+        f'<span class="page-number">{_escape(page_number)}</span>'
+        '</header>'
+        f'<p class="page-lead">{_escape(lead)}</p>'
+        f'{body_html}'
+        f'<footer class="page-footer"><span>{_escape(footer_left)}</span><span>Research use only</span></footer>'
+        '</section>'
+    )
+
+
+def _nav_html() -> str:
+    items = []
+    for i, (section_id, num, label) in enumerate(NAV_ITEMS):
+        active = ' class="active"' if i == 0 else ''
+        items.append(f'<a href="#{_escape(section_id)}"{active}><span>{_escape(num)}</span>{_escape(label)}</a>')
+    return ''.join(items)
+
+
+def _embed_image(fig_path: str | None) -> str | None:
+    if not fig_path:
+        return None
+    path = Path(fig_path)
+    if not path.exists() or not path.is_file():
+        return None
+    mime = mimetypes.guess_type(path.name)[0] or "image/png"
+    data = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{data}"
+
+
+def _figure_card(title: str, subtitle: str, fig_path: str | None, alt: str) -> str:
+    src = _embed_image(fig_path)
+    if src:
+        media = f'<img class="report-image" src="{src}" alt="{_escape(alt)}">'
+    else:
+        media = f'<div class="figure-empty">Figure not available: {_escape(title)}</div>'
+    return (
+        '<div class="card chart-card">'
+        '<div class="chart-title">'
+        f'<strong>{_escape(title)}</strong>'
+        f'<span>{_escape(subtitle)}</span>'
+        '</div>'
+        f'{media}'
+        '</div>'
+    )
+
+
+def _spirometry_svg(fev1, fvc) -> str:
+    fev1_val = _as_float(fev1)
+    fvc_val = _as_float(fvc)
+    vals = [v for v in [fev1_val, fvc_val] if v is not None]
+    max_val = max(vals + [4.0])
+    chart_top = 35
+    chart_bottom = 205
+    chart_height = chart_bottom - chart_top
+
+    def bar_y(v: float | None) -> tuple[float, float]:
+        if v is None:
+            return chart_bottom, 0
+        h = max(0.0, min(chart_height, (v / max_val) * chart_height))
+        return chart_bottom - h, h
+
+    y1, h1 = bar_y(fev1_val)
+    y2, h2 = bar_y(fvc_val)
+    label1 = _format_number(fev1_val, 2)
+    label2 = _format_number(fvc_val, 2)
+    return f'''<svg class="chart" viewBox="0 0 700 250" role="img" aria-label="Bar chart comparing FEV1 and FVC">
+      <line class="axis" x1="70" y1="205" x2="660" y2="205"/>
+      <line class="axis" x1="70" y1="35" x2="70" y2="205"/>
+      <rect class="bar" x="190" y="{y1:.1f}" width="130" height="{h1:.1f}" rx="4"/>
+      <rect class="bar-soft" x="405" y="{y2:.1f}" width="130" height="{h2:.1f}" rx="4"/>
+      <text class="chart-label" x="235" y="226">FEV1</text>
+      <text class="chart-label" x="455" y="226">FVC</text>
+      <text class="chart-label" x="220" y="{max(24, y1 - 10):.1f}">{_escape(label1)} L</text>
+      <text class="chart-label" x="435" y="{max(24, y2 - 10):.1f}">{_escape(label2)} L</text>
+    </svg>'''
+
+
+def _task_note(bundle: dict, task: str) -> str:
+    note = _task_section(bundle, task).get("note")
+    if not note:
+        return ""
+    return f'<div class="inline-note">{_escape(str(note))}</div>'
+
+
+def _render_overview(bundle: dict, metadata: dict) -> str:
+    whole = bundle.get("whole", {})
+    missing = _missing_tasks(bundle)
+    missing_text = "None noted" if not missing else ", ".join(missing)
+    status_text = "Completed" if not missing else "Partial"
+    participant = _subject_label(bundle.get("sub_id", "sub-unknown"))
+    session = _session_plain(bundle.get("ses_id", "ses-unknown"))
+    age_text = _format_number(metadata.get("age") if isinstance(metadata, dict) else None, 0)
+    height_text = _format_text(metadata.get("height_cm") if isinstance(metadata, dict) else None)
+    if height_text != "—":
+        height_text += " cm"
+    weight_text = _format_text(metadata.get("weight_kg") if isinstance(metadata, dict) else None)
+    if weight_text != "—":
+        weight_text += " kg"
+    grid = (
+        '<div class="participant-grid">'
+        f'<div><span>Participant</span><strong>{_escape(participant)}</strong></div>'
+        f'<div><span>Session</span><strong>{_escape(session)}</strong></div>'
+        f'<div><span>Age</span><strong>{_escape(age_text)} years</strong></div>'
+        '<div><span>Scan time</span><strong>—</strong></div>'
+        f'<div><span>Testing status</span><strong>{_escape(status_text)}</strong></div>'
+        f'<div><span>Height</span><strong>{_escape(height_text)}</strong></div>'
+        f'<div><span>Weight</span><strong>{_escape(weight_text)}</strong></div>'
+        f'<div><span>Missing tasks</span><strong>{_escape(missing_text)}</strong></div>'
+        '</div>'
+    )
+    notices = [
+        _notice(
+            "Not for clinical use",
+            "This report summarizes research assessments and does not carry diagnostic or prescriptive authority. Measurements can vary with your physiological state on the day of testing.",
+        )
+    ]
+    if missing:
+        notices.append(_notice("Incomplete source data", f"The following task outputs are currently missing or incomplete: {missing_text}.", kind="info"))
+    if isinstance(metadata, dict) and metadata.get("_load_error"):
+        notices.append(_notice("Metadata fallback", str(metadata["_load_error"]), kind="info"))
+    report_map = (
+        '<div class="chapter-list">'
+        + _chapter_row("02", "Cognitive testing", "MoCA score and reaction indices", "Separate page")
+        + _chapter_row("03", "Spirometry", "FVC, FEV1, ratio, and peak flow", "Separate page", missing=not _task_present(bundle, "spirometry"))
+        + _chapter_row("04", "Resting cardiovascular", "Heart rate variability and blood pressure", "Figures added", missing=not _task_present(bundle, "rest"))
+        + _chapter_row("05", "Autonomic testing", "Supine-to-stand, Valsalva, and deep breathing", "Grouped chapter", missing=not any(_task_present(bundle, k) for k in ["sts", "valsalva", "breathing"]))
+        + '</div>'
+    )
+    body = grid + ''.join(notices) + '<h3 class="section-heading">Report map</h3>' + report_map
+    return _page(
+        "overview",
+        "Physiological & neuropsychological testing",
+        "Your study testing report",
+        "01 / Overview",
+        "A participant-friendly summary of the research assessments completed during this session. Each test family has its own page so findings are easier to review and future sections can be added consistently.",
+        body,
+        f"LC Study · {participant}",
+    )
+
+
+def _render_cognitive(bundle: dict, metadata: dict) -> str:
+    neuro = metadata.get("neuropsych", {}) if isinstance(metadata, dict) else {}
+    moca_total = neuro.get("MoCA_Total") if isinstance(neuro, dict) else None
+    hero_value = _format_number(moca_total, 0)
+    note = "Most recent MoCA value available in the source metadata. A single score is one point-in-time research measurement."
+    if _is_missing(moca_total):
+        note = "MoCA value is not currently available in the source metadata."
+    body = (
+        '<div class="score-band">'
+        '<div class="card hero-score"><div>'
+        f'<strong>{hero_value}<span class="metric-unit">/30</span></strong>'
+        '<span>MoCA total</span>'
+        '</div></div>'
+        '<div class="card interpretation">'
+        '<span class="eyebrow">Participant context</span>'
+        f'<h3>{_escape(note)}</h3>'
+        '<p>A score is one point-in-time research measurement. A healthcare professional can provide appropriate follow-up interpretation if you have concerns.</p>'
+        '</div>'
+        '</div>'
+        '<h3 class="section-heading">Reaction indices <small>Awaiting values from source dataset</small></h3>'
+        '<div class="grid grid-3">'
+        + _metric_card("Simple reaction time", None, "ms", "Median response latency", 0)
+        + _metric_card("Choice reaction time", None, "ms", "Median response latency", 0)
+        + _metric_card("Response variability", None, "ms", "Within-task consistency", 0)
+        + '</div>'
+        '<div class="disclosure"><button type="button">About this assessment +</button><div class="disclosure-content">The MoCA is a screening assessment, not a diagnosis. Performance may be influenced by language, education, fatigue, hearing, vision, and the testing environment.</div></div>'
+    )
+    return _page(
+        "cognitive",
+        "Section 01",
+        "Cognitive testing",
+        "02 / Cognitive",
+        "The Montreal Cognitive Assessment is a brief screening tool that samples several cognitive functions. The reaction-time placeholders are kept in the layout so we can connect them later without redesigning the report.",
+        body,
+        "LC Study · Cognitive testing",
+    )
+
+
+def _render_spirometry(bundle: dict) -> str:
+    whole = bundle.get("whole", {})
+    fev1 = whole.get("FEV1")
+    fvc = whole.get("FVC")
+    fev1_over_fvc = whole.get("FEV1_over_FVC")
+    pef = whole.get("PEF")
+    body = (
+        '<div class="grid grid-4">'
+        + _metric_card("FEV1", fev1, "L", "First-second volume")
+        + _metric_card("FVC", fvc, "L", "Forced vital capacity")
+        + _metric_card("FEV1 / FVC", fev1_over_fvc, "", "Calculated from reported values")
+        + _metric_card("PEF", pef, "L/s", "Peak expiratory flow")
+        + '</div>'
+        '<h3 class="section-heading">Volume comparison</h3>'
+        '<div class="card chart-card">'
+        '<div class="chart-title"><strong>Measured expiratory volumes</strong><span>Litres</span></div>'
+        f'{_spirometry_svg(fev1, fvc)}'
+        '</div>'
+        + _task_note(bundle, "spirometry") +
+        '<div class="disclosure"><button type="button">How to read spirometry values +</button><div class="disclosure-content">FEV1 is the air exhaled in the first second, FVC is total forced exhaled volume, and PEF is the fastest flow reached. Interpretation typically considers age, sex, height, reference equations, and test quality.</div></div>'
+    )
+    return _page(
+        "spirometry",
+        "Section 02",
+        "Spirometry",
+        "03 / Respiratory",
+        "Spirometry measures how much air you can exhale and how quickly you can exhale it. Results are presented separately from cognitive testing for clearer review.",
+        body,
+        "LC Study · Spirometry",
+    )
+
+
+def _render_resting(bundle: dict) -> str:
+    whole = bundle.get("whole", {})
+    body = (
+        '<div class="grid grid-4">'
+        + _metric_card("Mean heart rate", whole.get("mean_HR"), "bpm")
+        + _metric_card("RMSSD", whole.get("RMSSD"), "ms")
+        + _metric_card("LF / HF ratio", whole.get("LF_HF_ratio"), "")
+        + _metric_card("Mean RR", whole.get("mean_RR"), "s", digits=4)
+        + '</div>'
+        + _task_note(bundle, "rest") +
+        '<div class="disclosure"><button type="button">About HRV measures +</button><div class="disclosure-content">RMSSD is a time-domain heart-rate-variability measure associated primarily with parasympathetic activity. LF/HF is often reported as a frequency-domain index; interpretation remains context dependent.</div></div>'
+    )
+    return _page(
+        "cardiovascular",
+        "Section 03",
+        "Resting cardiovascular",
+        "04 / Resting state",
+        "Resting-state measurements summarize heart rhythm and arterial blood pressure during the recorded resting period. Figures provide context beyond the metric cards.",
+        body,
+        "LC Study · Resting cardiovascular",
+    )
+
+
+def _render_autonomic_overview(bundle: dict) -> str:
+    whole = bundle.get("whole", {})
+    body = (
+        '<div class="chapter-banner"><div><span class="eyebrow" style="color:oklch(78% .08 245)">One coherent chapter</span><h3 style="margin:8px 0 0;font:650 28px var(--font-display)">Response to posture, strain, and breathing</h3><p>Review the trends first, then the calculated indices and participant-oriented explanation.</p></div><div class="chapter-tests"><div>01 · Supine-to-stand response</div><div>02 · Valsalva maneuver</div><div>03 · Deep breathing response</div></div></div>'
+        '<div class="test-tabs" role="tablist"><button class="active" data-panel="auto-sts" type="button">Supine to stand</button><button data-panel="auto-val" type="button">Valsalva</button><button data-panel="auto-db" type="button">Deep breathing</button></div>'
+        '<div class="test-panel active" id="auto-sts"><div class="grid grid-3">'
+        + _metric_card("Delta HR", whole.get("delta_HR"), "bpm", digits=2, signed=True)
+        + _metric_card("Delta BP", whole.get("delta_BP"), "mmHg", digits=2, signed=True)
+        + _metric_card("Standing plateau HR", whole.get("plateau_HR"), "bpm")
+        + '</div></div>'
+        '<div class="test-panel" id="auto-val"><div class="grid grid-3">'
+        + _metric_card("Valsalva ratio", whole.get("Valsalva_ratio"), "")
+        + _metric_card("MAP phase II drop", None, "mmHg")
+        + _metric_card("MAP phase IV overshoot", None, "mmHg")
+        + '</div></div>'
+        '<div class="test-panel" id="auto-db"><div class="grid grid-3">'
+        + _metric_card("E:I ratio", whole.get("E_I_ratio"), "")
+        + _metric_card("Delta HR", whole.get("delta_HR_responses"), "bpm")
+        + _metric_card("Breathing cycles", None, "")
+        + '</div></div>'
+        '<h3 class="section-heading">Chapter structure</h3>'
+        '<div class="chapter-list">'
+        + _chapter_row("06", "Supine to stand", "Heart-rate and blood-pressure transition trends", "Ready", missing=not _task_present(bundle, "sts"))
+        + _chapter_row("07", "Valsalva", "Pressure and heart-rate waveforms by phase", "Waveforms", missing=not _task_present(bundle, "valsalva"))
+        + _chapter_row("08", "Deep breathing", "Respiratory sinus arrhythmia and E:I ratio", "Waveform", missing=not _task_present(bundle, "breathing"))
+        + '</div>'
+    )
+    return _page(
+        "autonomic",
+        "Section 04",
+        "Autonomic testing",
+        "05 / Chapter overview",
+        "The autonomic nervous system helps regulate involuntary functions such as heart rate and blood pressure. This chapter groups the three autonomic assessments while preserving a dedicated page for each.",
+        body,
+        "LC Study · Autonomic testing",
+    )
+
+
+def _render_sts(bundle: dict) -> str:
+    whole = bundle.get("whole", {})
+    figures = bundle.get("figures", {})
+    body = (
+        '<div class="grid grid-4">'
+        + _metric_card("Baseline HR", whole.get("baseline_HR"), "bpm")
+        + _metric_card("Plateau HR", whole.get("plateau_HR"), "bpm")
+        + _metric_card("Delta HR", whole.get("delta_HR"), "bpm", signed=True)
+        + _metric_card("Delta BP", whole.get("delta_BP"), "mmHg", signed=True)
+        + '</div>'
+        '<h3 class="section-heading">Transition trend</h3>'
+        + _figure_card("Heart rate and mean blood pressure", "Source-derived figure", figures.get("STS_HR_MAP"), "Supine to stand figure")
+        + _task_note(bundle, "sts") +
+        '<div class="disclosure"><button type="button">About orthostatic response +</button><div class="disclosure-content">Orthostatic intolerance describes symptoms that occur on standing and improve when lying down. Formal interpretation considers symptoms, timing, heart-rate change, blood-pressure change, medications, and clinical context.</div></div>'
+    )
+    return _page(
+        "sts",
+        "Autonomic testing · 01",
+        "Supine to stand",
+        "06 / STS",
+        "This assessment summarizes the change in heart rate and blood pressure from lying down to standing.",
+        body,
+        "LC Study · Autonomic · Supine to stand",
+    )
+
+
+def _render_valsalva(bundle: dict) -> str:
+    whole = bundle.get("whole", {})
+    figures = bundle.get("figures", {})
+    figure_block = '<div class="figure-grid">'
+    figure_block += _figure_card("Valsalva heart-rate response", "Source-derived figure", figures.get("Valsalva_plot"), "Valsalva heart rate figure")
+    figure_block += '</div>'
+    body = (
+        '<div class="grid grid-3">'
+        + _metric_card("Valsalva ratio", whole.get("Valsalva_ratio"), "", "Reported in source report")
+        + _metric_card("MAP phase II drop", None, "mmHg", "Connect source dataset")
+        + _metric_card("MAP phase IV overshoot", None, "mmHg", "Connect source dataset")
+        + '</div>'
+        '<h3 class="section-heading">Synchronized waveforms</h3>'
+        + figure_block
+        + _task_note(bundle, "valsalva")
+    )
+    return _page(
+        "valsalva",
+        "Autonomic testing · 02",
+        "Valsalva maneuver",
+        "07 / Valsalva",
+        "The Valsalva maneuver records cardiovascular responses during a controlled strain and recovery. The figure below reflects the source-derived best repetition output when available.",
+        body,
+        "LC Study · Autonomic · Valsalva",
+    )
+
+
+def _render_deep_breathing(bundle: dict) -> str:
+    whole = bundle.get("whole", {})
+    figures = bundle.get("figures", {})
+    body = (
+        '<div class="grid grid-3">'
+        + _metric_card("E:I ratio", whole.get("E_I_ratio"), "")
+        + _metric_card("Delta HR", whole.get("delta_HR_responses"), "bpm")
+        + _metric_card("Cycle count", None, "", "Connect source dataset")
+        + '</div>'
+        '<h3 class="section-heading">Breathing-linked heart-rate response</h3>'
+        + _figure_card("Heart rate waveform", "Source-derived figure", figures.get("DeepBreathing_plot"), "Deep breathing figure")
+        + _task_note(bundle, "breathing") +
+        '<div class="disclosure"><button type="button">About E:I ratio +</button><div class="disclosure-content">The expiratory-to-inspiratory ratio compares the longest RR interval during expiration with the shortest RR interval during inspiration. It is interpreted in relation to age, test conditions, and other autonomic measures.</div></div>'
+    )
+    return _page(
+        "deep-breathing",
+        "Autonomic testing · 03",
+        "Deep breathing",
+        "08 / Deep breathing",
+        "The deep-breathing assessment evaluates heart-rate variation across slow breathing cycles, a response associated with cardiovagal function.",
+        body,
+        "LC Study · Autonomic · Deep breathing",
+    )
+
+
+def _render_glossary(bundle: dict) -> str:
+    body = (
+        '<h3 class="section-heading">Glossary</h3>'
+        '<div class="glossary">'
+        '<div><strong>MoCA</strong><span>Montreal Cognitive Assessment.</span></div>'
+        '<div><strong>FEV1</strong><span>Forced expiratory volume in one second.</span></div>'
+        '<div><strong>FVC</strong><span>Forced vital capacity.</span></div>'
+        '<div><strong>PEF</strong><span>Peak expiratory flow.</span></div>'
+        '<div><strong>RR interval</strong><span>Time between consecutive R-waves on an ECG.</span></div>'
+        '<div><strong>RMSSD</strong><span>Root mean square of successive differences.</span></div>'
+        '<div><strong>LF/HF ratio</strong><span>Ratio of low- to high-frequency HRV power.</span></div>'
+        '<div><strong>ABP</strong><span>Arterial blood pressure.</span></div>'
+        '<div><strong>STS</strong><span>Supine-to-stand test.</span></div>'
+        '<div><strong>E:I ratio</strong><span>Expiratory-to-inspiratory ratio.</span></div>'
+        '</div>'
+        '<h3 class="section-heading">References</h3>'
+        '<ol class="references">'
+        '<li>Nasreddine ZS, Phillips NA, Bédirian V, et al. The Montreal Cognitive Assessment, MoCA. J Am Geriatr Soc. 2005;53(4):695–699.</li>'
+        '<li>Shaffer F, Ginsberg JP. An overview of heart rate variability metrics and norms. Front Public Health. 2017;5:258.</li>'
+        '<li>Ewing DJ, Martyn CN, Young RJ, Clarke BF. The value of cardiovascular autonomic function tests. Diabetes Care. 1985;8(5):491–498.</li>'
+        '<li>Risk M, Bril V, Broadbridge C, Cohen A. Heart rate variability measurement in diabetic neuropathy. Diabetes Technol Ther. 2001;3(1):63–76.</li>'
+        '<li>Bryarly M, Phillips L, Fu Q, Vernino S, Levine BD. Postural orthostatic tachycardia syndrome. J Am Coll Cardiol. 2019;73(10):1207–1228.</li>'
+        '<li>Zygmunt A, Stanczyk J. Methods of evaluation of autonomic nervous system function. Arch Med Sci. 2010;6(1):11–18.</li>'
+        '</ol>'
+        + _notice("Reminder", "This research report is intended to share recorded study measurements with the participant. It is not a clinical diagnosis or treatment recommendation.")
+    )
+    return _page(
+        "glossary",
+        "Supporting information",
+        "Glossary & references",
+        "09 / Reference",
+        "Definitions and citations are provided here so the report can stand on its own when it is shared or printed.",
+        body,
+        "LC Study · Glossary & references",
+    )
+
+
+def build_report_html(bundle: dict, metadata: dict) -> str:
+    sub_id = bundle.get("sub_id", "sub-unknown")
+    ses_id = bundle.get("ses_id", "ses-unknown")
+    title = f"LC Study Participant Testing Report - {sub_id} {ses_id}"
+
+    if not TEMPLATE_PATH.exists():
+        raise FileNotFoundError(f"Missing HTML template: {TEMPLATE_PATH}")
+
+    template = TEMPLATE_PATH.read_text(encoding="utf-8")
+    body = ''.join([
+        _render_overview(bundle, metadata),
+        _render_cognitive(bundle, metadata),
+        _render_spirometry(bundle),
+        _render_resting(bundle),
+        _render_autonomic_overview(bundle),
+        _render_sts(bundle),
+        _render_valsalva(bundle),
+        _render_deep_breathing(bundle),
+        _render_glossary(bundle),
+    ])
+
+    return (
+        template
+        .replace("__REPORT_TITLE__", _escape(title))
+        .replace("__SUBJECT_LABEL__", _escape(_subject_label(sub_id)))
+        .replace("__SESSION_LABEL__", _escape(f"Session {_session_plain(ses_id)}"))
+        .replace("__REPORT_NAV__", _nav_html())
+        .replace("__REPORT_BODY__", body)
+    )
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Render a subject/session HTML report using the standalone HTML template.")
+    ap.add_argument("--out_root", default="derived", help="Output root folder (e.g., derived)")
+    ap.add_argument("--sub", required=True, help="Subject code like 2062")
+    ap.add_argument("--ses", default="1", help="Session number like 1 or 2")
+    ap.add_argument("--quarto_bin", default="quarto", help="Deprecated compatibility argument; ignored.")
+    args = ap.parse_args()
+
+    out_root = Path(args.out_root)
+    sub_id = f"sub-{args.sub}"
+    ses_id = f"ses-{args.ses}"
+    base_dir = out_root / sub_id / ses_id
+    bundle_path = base_dir / f"{sub_id}_{ses_id}_all_metrics.json"
+    html_path = base_dir / f"{sub_id}_{ses_id}_report.html"
+
+    if not bundle_path.exists():
+        print(f"[ERROR] Missing merged JSON bundle: {bundle_path}")
+        return 1
+
+    bundle = _load_bundle(bundle_path)
+    metadata = _load_subject_metadata(sub_id, ses_id)
+    html_text = build_report_html(bundle, metadata)
+    html_path.write_text(html_text, encoding="utf-8")
+    print(f"[OK] Saved HTML report: {html_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

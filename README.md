@@ -1,207 +1,246 @@
-# LCS Physio Report Metrics Generation
+# LCS Physio Report Generation
 
-This project generates per-task physiological metrics (and key figures) from Biopac `.acq` recordings, and optionally merges them into a single subject/session bundle for downstream MATLAB/Word report generation. A Streamlit UI is provided to run tasks interactively and preview outputs.
+This project generates per-task physiological report metrics from Biopac `.acq` files, merges them into one subject/session bundle, and renders a standalone HTML report.
 
----
+Current status:
+- command-line driven
+- HTML report is the active final output
+- no active Streamlit frontend in this repo
+- no active MATLAB report path in this repo
 
-## What this project does
+## What the project does
 
-For a given subject/session (e.g., `sub-2062/ses-1`), the pipeline can produce:
+For one subject/session, the pipeline can generate:
+- `rest`: resting HR/HRV and BP summary metrics plus figures
+- `sts`: supine-to-stand metrics plus figure
+- `valsalva`: Valsalva ratio plus figure
+- `breathing`: deep-breathing metrics plus figure
+- `spirometry`: FEV1 / FVC / PEF extracted metrics
 
-* REST: baseline HR/HRV and BP summary metrics + REST figures
-* STS: supine vs standing HR/MAP plateau metrics + STS figure
-* Valsalva: Valsalva ratio + best repetition HR figure (+ optional debug figure)
-* Breathing: deep breathing response metrics + breathing HR figure
-* Spirometry: FEV1/FVC/PEF extracted metrics (if available)
-
-Then it can MERGE all task `.mat` files into a single:
-
-* `derived/sub-XXXX/ses-Y/sub-XXXX_ses-Y_all_metrics.mat`
-
-This merged bundle contains:
-
-* `metrics_by_task`: nested task metrics (rest/sts/valsalva/breathing/spirometry)
-* `whole`: flattened fields used by your MATLAB report code
-* `figures`: paths to key figures for report insertion
-
----
+Then it can:
+- merge task outputs into one combined bundle
+- render one subject-specific HTML report
 
 ## Repository layout
 
-Typical structure:
+Main source folders:
+- `scripts/`: task runners, merge script, and final HTML renderer
+- `html_report/`: active HTML report template
+- `src/`: shared processing helpers, including the local metadata loader used by the report renderer
 
-project_root/
-streamlit_app/
-app.py
-scripts/
-run_rest_acq.py
-run_sts_acq.py
-run_valsalva_acq.py
-run_breathing_acq.py
-run_spirometry_extract.py
-merge_subject_all_metrics_only.py
-src/
-bp_processing.py
-derived/
-sub-2062/
-ses-1/
-rest/
-rest_metrics.mat
-resting_hr.png
-resting_BP.png
-sts/
-sts_metrics.mat
-STS_HR_MAP.png
-valsalva/
-valsalva_metrics.mat
-valsalva_best_rep_hr.png
-valsalva_debug_full_hr.png
-breathing/
-breathing_metrics.mat
-breathing_hr_8to9min.png
-spirometry/
-spirometry_metrics.mat
-sub-2062_ses-1_all_metrics.mat
+Generated/local-only folders:
+- `derived/`: generated per-subject outputs
+- `outputs/`: ad hoc generated outputs
+- `logs/`: runtime logs
+- `.venv/`: local environment
 
-Note: output filenames may differ slightly depending on script versions. The Streamlit app expects the defaults above.
-
----
+These generated/local folders should not be committed.
 
 ## Input data layout
 
-The scripts expect a BIDS-like folder structure under a physio root (default shown):
+The scripts expect a physio root like:
 
+```text
 /export02/projects/LCS/01_physio/
-sub-2062/
-ses-1/
-sub-2062_ses-1_task-rest_physio.acq
-sub-2062_ses-1_task-sts_physio.acq
-sub-2062_ses-1_task-valsalva_physio.acq
-sub-2062_ses-1_task-breathing_physio.acq
-...
+  sub-2062/
+    ses-1/
+      sub-2062_ses-1_task-rest_physio.acq
+      sub-2062_ses-1_task-STS_physio.acq
+      sub-2062_ses-1_task-valsalva_physio.acq
+      sub-2062_ses-1_task-breath_physio.acq
+```
 
-Most scripts have fallback glob searches if names differ.
+Some scripts also read spirometry data from the shared spirometry CSV configured in the code.
 
----
+## Metadata sources
+
+The final HTML renderer is now self-contained with respect to metadata loading. It does **not** import code from the neighboring `physio-qc` repository.
+
+Instead, this repo reads metadata directly from the shared phenotype/source files under:
+
+```text
+/export02/projects/LCS/05_phenotype/redcap_exports
+```
+
+This is used to populate fields such as:
+- age
+- BMI
+- sex assigned at birth
+- gender
+- recording date
+- researchers
+- neuropsych summary including `MoCA_Total`
 
 ## Installation
 
-Create a virtual environment and install dependencies:
+Create and activate a virtual environment:
 
-python -m venv .venv
+```bash
+python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
 
-pip install -U pip
-pip install streamlit numpy scipy pandas matplotlib bioread neurokit2
+If you already have a working environment from `physio-qc`, you can also use that interpreter directly.
 
-If your repo uses additional packages in `src/`, install those as needed.
+## Main workflow
 
----
+The current workflow is three steps.
 
-## Run the Streamlit UI
+### 1. Run per-task processing for one subject/session
 
-From project root:
+```bash
+python scripts/run_subject_all.py \
+  --root /export02/projects/LCS/01_physio \
+  --sub 2062 \
+  --ses 1 \
+  --out_root derived
+```
 
-streamlit run streamlit_app/app.py
+This runs the task scripts and writes per-task outputs under:
 
-In the UI:
+```text
+derived/sub-2062/ses-1/
+  rest/
+  sts/
+  valsalva/
+  breathing/
+  spirometry/
+```
 
-1. Set Physio root, Output root, Subject, and Session
-2. Set channel numbers (ECG/BP/PPG) as needed
-3. Run tasks (REST / STS / Valsalva / Breathing / Spirometry)
-4. Preview figures + `.mat` metrics per task
-5. Click merge_tasks_results to build the combined `*_all_metrics.mat`
+Important:
+- `run_subject_all.py` currently stops after task execution plus a combined `.mat` bundle
+- it does **not** by itself produce the merged JSON or final HTML report
 
----
+### 2. Build the merged MAT + JSON bundle
 
-## Run scripts directly (CLI)
+```bash
+python scripts/merge_subject_all_metrics_only.py \
+  --out_root derived \
+  --sub 2062 \
+  --ses 1
+```
 
-REST:
-python scripts/run_rest_acq.py --root /export02/projects/LCS/01_physio --sub 2062 --ses 1 --one_based --ecg_ch 6 --bp_ch 10 --save --out_root derived
+This writes:
 
-Outputs:
+```text
+derived/sub-2062/ses-1/sub-2062_ses-1_all_metrics.mat
+derived/sub-2062/ses-1/sub-2062_ses-1_all_metrics.json
+```
 
-* derived/sub-2062/ses-1/rest/rest_metrics.mat
-* derived/sub-2062/ses-1/rest/resting_hr.png
-* derived/sub-2062/ses-1/rest/resting_BP.png
+The merged bundle contains:
+- `metrics_by_task`
+- `whole`
+- `figures`
+- `sub_id`
+- `ses_id`
 
-STS:
-python scripts/run_sts_acq.py --root /export02/projects/LCS/01_physio --sub 2062 --ses 1 --one_based --ecg_ch 4 --bp_ch 10 --save --out_root derived
+### 3. Render the final HTML report
 
-Valsalva:
-python scripts/run_valsalva_acq.py --root /export02/projects/LCS/01_physio --sub 2062 --ses 1 --one_based --ecg_ch 4 --save --out_root derived
+```bash
+python scripts/render_subject_report_html.py \
+  --out_root derived \
+  --sub 2062 \
+  --ses 1
+```
 
-Optional PPG:
-python scripts/run_valsalva_acq.py ... --force_ppg --ppg_ch 5
+This writes:
 
-Breathing:
-python scripts/run_breathing_acq.py --root /export02/projects/LCS/01_physio --sub 2062 --ses 1 --one_based --ecg_ch 4 --win_start_min 8 --win_end_min 9 --save --out_root derived
+```text
+derived/sub-2062/ses-1/sub-2062_ses-1_report.html
+```
 
-Spirometry:
-python scripts/run_spirometry_extract.py --sub 2062 --ses 1 --out_root derived
+The active template is:
+- `html_report/participant_report_template.html`
 
----
+## Individual task scripts
 
-## Merge all task outputs (no re-processing)
+If you want to run tasks separately instead of using `run_subject_all.py`, the main scripts are:
+- `scripts/run_rest_acq.py`
+- `scripts/run_sts_acq.py`
+- `scripts/run_valsalva_acq.py`
+- `scripts/run_breathing_acq.py`
+- `scripts/run_spirometry_extract.py`
 
-After running tasks, generate the combined bundle:
+Example:
 
-python scripts/merge_subject_all_metrics_only.py --out_root derived --sub 2062 --ses 1
+```bash
+python scripts/run_rest_acq.py \
+  --root /export02/projects/LCS/01_physio \
+  --sub 2062 \
+  --ses 1 \
+  --one_based \
+  --ecg_ch 6 \
+  --bp_ch 10 \
+  --save \
+  --out_root derived
+```
 
-Optional: auto-create a Valsalva placeholder when it is missing AND no `.acq` exists:
+## Opening the HTML report
 
-python scripts/merge_subject_all_metrics_only.py --out_root derived --sub 2062 --ses 1 --root /export02/projects/LCS/01_physio --make_valsalva_placeholder_if_missing
+One reliable way to view the output is to serve the report directory:
 
-Output:
+```bash
+cd "derived/sub-2062/ses-1"
+python3 -m http.server 8000
+```
 
-* derived/sub-2062/ses-1/sub-2062_ses-1_all_metrics.mat
+Then open:
 
+```text
+http://<server-name>:8000/sub-2062_ses-1_report.html
+```
 
-## notes on matlab material folder
-after obtaining all the necessary metrices in one's derived folder, download that folder to local then run "new_compile_whole_python_v2.m" 
-Please make sure the "+myReports" folder is at the same directory as the "new_compile_whole_python_v2.m", "+myReports" contains the template word document where all the placeholders exist and can be changed. 
-To modify the layout of the file, you need to open "matlab_material/+myReports/@SessionReport/resources/templates/docx/default.dotx". Change the place holder or any layout elements, then save it as "word template*"!!!
+## Channel notes
 
+The task scripts use explicit channel arguments for ECG / BP / PPG where needed.
 
----
+Many runs depend on correct channel numbers. If defaults are wrong for a subject, override them when calling the script.
 
-## Notes on channels (1-based vs 0-based)
-
-Most Biopac channel selections in the UI/scripts use 1-based indexing by default:
-
-* Channel 1 = first channel in the `.acq` file
-
-If you want 0-based, disable the checkbox in Streamlit or remove `--one_based`.
-
----
+`--one_based` means:
+- channel 1 = first channel in the `.acq` file
 
 ## Troubleshooting
 
-1. “missing ScriptRunContext” warnings:
-   This happens when running a Streamlit script with python. Always run:
-   streamlit run streamlit_app/app.py
+### Missing Python dependency
+Example:
+```text
+ModuleNotFoundError: No module named 'bioread'
+```
+Use the correct virtual environment and install requirements.
 
-2. “unrecognized arguments”:
-   Only pass flags that the underlying script supports. Keep Streamlit debug flags task-specific.
+### Final HTML report not created
+Make sure you ran all three steps:
+1. `run_subject_all.py`
+2. `merge_subject_all_metrics_only.py`
+3. `render_subject_report_html.py`
 
-3. `.mat` metrics not displaying:
-   The app uses scipy.io.loadmat. Ensure SciPy is installed:
-   pip install scipy
+For the renderer itself, no neighboring `physio-qc` checkout is required anymore.
 
-4. Output file not found after merge:
-   Check that the merge script writes the same filename that the app expects (paths["all_mat"]) and that out_root/sub/ses match.
+### Some tasks fail for a subject
+Common causes:
+- wrong ECG/BP channel assumptions
+- missing task `.acq` file
+- subject-specific signal quality problems
 
----
+The merge/render steps can still be used on partial outputs if enough task files exist.
 
-## Extending
+## Current active files for report output
 
-* Add new task scripts under scripts/
-* Make them write: {task}/{task}_metrics.mat and any figures you want to preview
-* Update merge_subject_all_metrics_only.py to include the new task in metrics_by_task / whole mapping
-* Update streamlit_app/app.py to add a task section (button + preview)
+Active:
+- `scripts/run_subject_all.py`
+- `scripts/merge_subject_all_metrics_only.py`
+- `scripts/render_subject_report_html.py`
+- `html_report/participant_report_template.html`
+- `src/subject_metadata.py`
 
----
+Legacy/removed from active path:
+- Streamlit report frontend
+- MATLAB report generation
+- Quarto-based report rendering
+- dependency on `physio-qc` metadata-loading code
 
 ## License
 
-Internal research code. Add a license if you intend to distribute publicly.
+Internal research code. Add a public license before external distribution.

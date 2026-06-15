@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 from pathlib import Path
 
@@ -147,11 +148,56 @@ def _first_existing(*paths: Path) -> str:
     return str(paths[0]) if paths else ""
 
 
+def _first_present(d: dict, keys, default=np.nan):
+    """Return the first present key from a dict, else default."""
+    if not isinstance(d, dict):
+        return default
+    for key in keys:
+        if key in d:
+            return d[key]
+    return default
+
+
+def _to_jsonable(x):
+    """Convert numpy / matlab-ish values to clean JSON-serializable Python types."""
+    if x is None:
+        return None
+
+    if isinstance(x, (np.floating, float)):
+        val = float(x)
+        return val if math.isfinite(val) else None
+
+    if isinstance(x, (np.integer, int)):
+        return int(x)
+
+    if isinstance(x, (bool, np.bool_)):
+        return bool(x)
+
+    if isinstance(x, str):
+        return x
+
+    if isinstance(x, Path):
+        return str(x)
+
+    if isinstance(x, np.ndarray):
+        if x.ndim == 0:
+            return _to_jsonable(x.item())
+        return [_to_jsonable(v) for v in x.tolist()]
+
+    if isinstance(x, (list, tuple)):
+        return [_to_jsonable(v) for v in x]
+
+    if isinstance(x, dict):
+        return {str(k): _to_jsonable(v) for k, v in x.items()}
+
+    return str(x)
+
+
 def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
     """
-    Build a combined MAT that contains:
+    Build combined MAT + JSON bundles that contain:
       - metrics_by_task: dict (rest/sts/valsalva/breathing/spirometry)
-      - whole: flattened fields used by your MATLAB report code
+      - whole: flattened fields used by the legacy MATLAB report code
       - figures: paths to key figures
     """
     from scipy.io import loadmat, savemat
@@ -180,55 +226,89 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
 
     # REST
     rest = metrics_by_task.get("rest", {})
-    whole["mean_MAP"] = rest.get("mean_MAP", np.nan)
-    whole["mean_sysBP"] = rest.get("mean_sysBP", np.nan)
-    whole["mean_diaBP"] = rest.get("mean_diaBP", np.nan)
-    whole["mean_pulseBP"] = rest.get("mean_pulseBP", np.nan)
-    whole["mean_RR"] = rest.get("mean_RR", np.nan)
-    whole["mean_HR"] = rest.get("mean_HR", np.nan)
-    whole["RMSSD"] = rest.get("RMSSD_ms", np.nan)
-    whole["LF_HF_ratio"] = rest.get("LF_HF", np.nan)
+    whole["mean_MAP"] = _first_present(rest, ["mean_MAP", "mean_map"], np.nan)
+    whole["mean_sysBP"] = _first_present(rest, ["mean_sysBP", "mean_sysbp", "mean_sbp"], np.nan)
+    whole["mean_diaBP"] = _first_present(rest, ["mean_diaBP", "mean_diabp", "mean_dbp"], np.nan)
+    whole["mean_pulseBP"] = _first_present(rest, ["mean_pulseBP", "mean_pulsebp"], np.nan)
+    whole["mean_RR"] = _first_present(rest, ["mean_RR", "mean_rr"], np.nan)
+    whole["mean_HR"] = _first_present(rest, ["mean_HR", "mean_hr"], np.nan)
+    whole["RMSSD"] = _first_present(rest, ["RMSSD_ms", "RMSSD", "rmssd_ms"], np.nan)
+    whole["LF_HF_ratio"] = _first_present(rest, ["LF_HF", "LF_HF_ratio", "lf_hf", "LF_HF_power"], np.nan)
 
     # STS
     sts = metrics_by_task.get("sts", {})
-    whole["baseline_HR"] = sts.get("mean_HR_sup", np.nan)
-    whole["plateau_HR"] = sts.get("mean_RR_plt", np.nan)
-    whole["delta_HR"] = sts.get("dHR", np.nan)
-    whole["baseline_BP"] = sts.get("mean_MAP_sup", np.nan)
-    whole["plateau_BP"] = sts.get("mean_MAP_plt", np.nan)
-    whole["delta_BP"] = sts.get("dMAP", np.nan)
+    whole["baseline_HR"] = _first_present(
+        sts,
+        ["baseline_HR", "baseline_hr", "mean_HR_sup", "mean_hr_sup", "mean_HR_supine", "supine_mean_HR"],
+        np.nan,
+    )
+    whole["plateau_HR"] = _first_present(
+        sts,
+        ["plateau_HR", "plateau_hr", "mean_HR_plt", "mean_hr_plt", "mean_HR_plateau", "plateau_mean_HR"],
+        np.nan,
+    )
+    whole["delta_HR"] = _first_present(sts, ["delta_HR", "delta_hr", "dHR", "dhr"], np.nan)
+    whole["baseline_BP"] = _first_present(
+        sts,
+        ["baseline_BP", "baseline_bp", "baseline_MAP", "baseline_map", "mean_MAP_sup", "mean_map_sup", "supine_mean_MAP"],
+        np.nan,
+    )
+    whole["plateau_BP"] = _first_present(
+        sts,
+        ["plateau_BP", "plateau_bp", "plateau_MAP", "plateau_map", "mean_MAP_plt", "mean_map_plt", "plateau_mean_MAP"],
+        np.nan,
+    )
+    whole["delta_BP"] = _first_present(sts, ["delta_BP", "delta_bp", "delta_MAP", "delta_map", "dMAP", "dmap"], np.nan)
 
     # Valsalva
     val = metrics_by_task.get("valsalva", {})
-    whole["Valsalva_ratio"] = val.get("valsalva_ratio", np.nan)
+    whole["Valsalva_ratio"] = _first_present(val, ["valsalva_ratio", "Valsalva_ratio", "valsalvaRatio"], np.nan)
 
     # Breathing
     br = metrics_by_task.get("breathing", {})
-    whole["E_I_ratio"] = br.get("ratio", np.nan)
-    whole["delta_HR_responses"] = br.get("diff_bpm", np.nan)
+    whole["E_I_ratio"] = _first_present(br, ["ratio", "E_I_ratio", "ei_ratio", "EIRatio"], np.nan)
+    whole["delta_HR_responses"] = _first_present(
+        br,
+        ["diff_bpm", "delta_bpm", "HR_diff", "hr_diff", "HR_delta_RSA", "HR_delta"],
+        np.nan,
+    )
 
     # Spirometry
     sp = metrics_by_task.get("spirometry", {})
-    whole["FEV1"] = sp.get("FEV1_max", np.nan)
-    whole["FVC"] = sp.get("FVC_max", np.nan)
-    whole["PEF"] = sp.get("PEF_max", np.nan)
+    whole["FEV1"] = _first_present(sp, ["FEV1_max", "FEV1"], np.nan)
+    whole["FVC"] = _first_present(sp, ["FVC_max", "FVC"], np.nan)
+    whole["PEF"] = _first_present(sp, ["PEF_max", "PEF"], np.nan)
 
     fev1 = whole["FEV1"]
     fvc = whole["FVC"]
     whole["FVC_over_FEV1"] = (fvc / fev1) if (np.isfinite(fev1) and fev1 != 0) else np.nan
     whole["FEV1_over_FVC"] = (fev1 / fvc) if (np.isfinite(fvc) and fvc != 0) else np.nan
 
-    # Figures (robust: try multiple names)
     figs = {
+        "REST_HR": _first_existing(base / "rest" / "resting_hr.png"),
+        "REST_BP": _first_existing(base / "rest" / "resting_BP.png"),
         "STS_HR_MAP": _first_existing(
             base / "sts" / "STS_HR_MAP.png",
             base / "sts" / "STS_HR_MAP_plot.png",
+            base / "sts" / "STS_HR_MAP.jpg",
         ),
-        "Valsalva_plot": str(base / "valsalva" / "valsalva_best_rep_hr.png"),
-        "DeepBreathing_plot": str(base / "breathing" / "breathing_hr_8to9min.png"),
+        "Valsalva_plot": _first_existing(
+            base / "valsalva" / "valsalva_best_rep_hr.png",
+            base / "valsalva" / "valsalva_best_rep_hr.jpg",
+            base / "valsalva" / "valsalva_best_rep_hr.tif",
+        ),
+        "Valsalva_debug_plot": _first_existing(base / "valsalva" / "valsalva_debug_full_hr.png"),
+        "DeepBreathing_plot": _first_existing(
+            base / "breathing" / "deep_breathing_HR_plot.png",
+            base / "breathing" / "breathing_hr_8to9min.png",
+            base / "breathing" / "breathing_hr_window.png",
+            base / "breathing" / "breathing_hr_plot.png",
+        ),
+        "Spirometry_plot": _first_existing(base / "spirometry" / "spirometry_summary.png"),
     }
 
-    out_path = base / f"sub-{sub}_ses-{ses}_all_metrics.mat"
+    out_mat = base / f"sub-{sub}_ses-{ses}_all_metrics.mat"
+    out_json = base / f"sub-{sub}_ses-{ses}_all_metrics.json"
     payload = {
         "metrics_by_task": _sanitize_for_matlab(metrics_by_task),
         "whole": _sanitize_for_matlab(whole),
@@ -237,9 +317,14 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
         "ses_id": f"ses-{ses}",
     }
 
-    savemat(str(out_path), payload, do_compression=True)
-    print(f"[OK] Saved combined bundle: {out_path}")
-    return out_path
+    savemat(str(out_mat), payload, do_compression=True)
+    print(f"[OK] Saved combined MAT bundle: {out_mat}")
+
+    with open(out_json, "w", encoding="utf-8") as f:
+        json.dump(_to_jsonable(payload), f, indent=2)
+    print(f"[OK] Saved combined JSON bundle: {out_json}")
+
+    return out_mat
 
 
 # ----------------------------
@@ -247,7 +332,7 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
 # ----------------------------
 def main():
     ap = argparse.ArgumentParser(
-        description="MERGE ONLY: Create sub-*_ses-*_all_metrics.mat from existing per-task metrics."
+        description="MERGE ONLY: Create sub-*_ses-*_all_metrics.{mat,json} from existing per-task metrics."
     )
     ap.add_argument("--out_root", default="derived", help="Output root folder (e.g., derived)")
     ap.add_argument("--sub", required=True, help="Subject code like 2062")

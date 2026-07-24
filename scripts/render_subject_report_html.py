@@ -18,19 +18,6 @@ REPORT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPORT_ROOT / "src"
 
 
-NAV_ITEMS = [
-    ("overview", "01", "Overview"),
-    ("cognitive", "02", "Cognitive testing"),
-    ("spirometry", "03", "Spirometry"),
-    ("cardiovascular", "04", "Resting cardiovascular"),
-    ("autonomic", "05", "Autonomic overview"),
-    ("sts", "06", "Supine to stand"),
-    ("valsalva", "07", "Valsalva"),
-    ("deep-breathing", "08", "Deep breathing"),
-    ("glossary", "09", "Glossary & references"),
-]
-
-
 def _load_bundle(bundle_path: Path) -> dict:
     with open(bundle_path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -137,6 +124,12 @@ def _metric_card(label: str, value, unit: str = "", note: str = "", digits: int 
     )
 
 
+def _measure_item(label: str, value, unit: str = "", digits: int = 2, text_value: bool = False) -> str:
+    value_str = _format_text(value) if text_value else _format_number(value, digits=digits)
+    unit_str = f" {_escape(unit)}" if unit else ""
+    return f'<div><span>{_escape(label)}</span><strong>{value_str}{unit_str}</strong></div>'
+
+
 def _notice(label: str, text: str, kind: str = "danger") -> str:
     extra = " info" if kind == "info" else ""
     return f'<div class="notice{extra}"><strong>{_escape(label)}</strong><span>{_escape(text)}</span></div>'
@@ -173,14 +166,6 @@ def _page(section_id: str, eyebrow: str, title: str, page_number: str, lead: str
     )
 
 
-def _nav_html() -> str:
-    items = []
-    for i, (section_id, num, label) in enumerate(NAV_ITEMS):
-        active = ' class="active"' if i == 0 else ''
-        items.append(f'<a href="#{_escape(section_id)}"{active}><span>{_escape(num)}</span>{_escape(label)}</a>')
-    return ''.join(items)
-
-
 def _embed_image(fig_path: str | None) -> str | None:
     if not fig_path:
         return None
@@ -209,34 +194,25 @@ def _figure_card(title: str, subtitle: str, fig_path: str | None, alt: str) -> s
     )
 
 
-def _spirometry_svg(fev1, fvc) -> str:
+def _spirometry_svg(fev1, fvc, fev1_over_fvc) -> str:
     fev1_val = _as_float(fev1)
     fvc_val = _as_float(fvc)
-    vals = [v for v in [fev1_val, fvc_val] if v is not None]
-    max_val = max(vals + [4.0])
-    chart_top = 35
-    chart_bottom = 205
-    chart_height = chart_bottom - chart_top
+    ratio_val = _as_float(fev1_over_fvc)
 
-    def bar_y(v: float | None) -> tuple[float, float]:
-        if v is None:
-            return chart_bottom, 0
-        h = max(0.0, min(chart_height, (v / max_val) * chart_height))
-        return chart_bottom - h, h
+    def marker_x(value: float | None, maximum: float) -> float:
+        if value is None:
+            return 105.0
+        return 105.0 + max(0.0, min(1.0, value / maximum)) * 525.0
 
-    y1, h1 = bar_y(fev1_val)
-    y2, h2 = bar_y(fvc_val)
-    label1 = _format_number(fev1_val, 2)
-    label2 = _format_number(fvc_val, 2)
-    return f'''<svg class="chart" viewBox="0 0 700 250" role="img" aria-label="Bar chart comparing FEV1 and FVC">
-      <line class="axis" x1="70" y1="205" x2="660" y2="205"/>
-      <line class="axis" x1="70" y1="35" x2="70" y2="205"/>
-      <rect class="bar" x="190" y="{y1:.1f}" width="130" height="{h1:.1f}" rx="4"/>
-      <rect class="bar-soft" x="405" y="{y2:.1f}" width="130" height="{h2:.1f}" rx="4"/>
-      <text class="chart-label" x="235" y="226">FEV1</text>
-      <text class="chart-label" x="455" y="226">FVC</text>
-      <text class="chart-label" x="220" y="{max(24, y1 - 10):.1f}">{_escape(label1)} L</text>
-      <text class="chart-label" x="435" y="{max(24, y2 - 10):.1f}">{_escape(label2)} L</text>
+    fev1_x = marker_x(fev1_val, 6.0)
+    fvc_x = marker_x(fvc_val, 6.0)
+    ratio_x = marker_x(ratio_val, 1.2)
+    return f'''<svg class="chart" viewBox="0 0 700 220" role="img" aria-label="Participant spirometry values shown on an illustrative reference display">
+      <rect class="reference-range" x="350" y="35" width="245" height="132" rx="5"/>
+      <line class="axis" x1="105" y1="68" x2="630" y2="68"/><line class="axis" x1="105" y1="112" x2="630" y2="112"/><line class="axis" x1="105" y1="156" x2="630" y2="156"/>
+      <line class="participant-tick" x1="{fev1_x:.1f}" y1="56" x2="{fev1_x:.1f}" y2="80"/><line class="participant-tick" x1="{fvc_x:.1f}" y1="100" x2="{fvc_x:.1f}" y2="124"/><line class="participant-tick" x1="{ratio_x:.1f}" y1="144" x2="{ratio_x:.1f}" y2="168"/>
+      <text class="chart-label" x="30" y="72">FEV1</text><text class="chart-label" x="30" y="116">FVC</text><text class="chart-label" x="30" y="160">FEV1/FVC</text>
+      <text class="chart-label" x="340" y="194">lower reference</text><text class="chart-label" x="555" y="194">expected</text><text class="chart-label" x="430" y="28">illustrative healthy range</text>
     </svg>'''
 
 
@@ -323,11 +299,6 @@ def _render_cognitive(bundle: dict, metadata: dict) -> str:
         '</div>'
         '</div>'
         '<h3 class="section-heading">Reaction indices <small>Awaiting values from source dataset</small></h3>'
-        '<div class="grid grid-3">'
-        + _metric_card("Simple reaction time", None, "ms", "Median response latency", 0)
-        + _metric_card("Choice reaction time", None, "ms", "Median response latency", 0)
-        + _metric_card("Response variability", None, "ms", "Within-task consistency", 0)
-        + '</div>'
         '<div class="disclosure"><button type="button">About this assessment +</button><div class="disclosure-content">The MoCA is a screening assessment, not a diagnosis. Performance may be influenced by language, education, fatigue, hearing, vision, and the testing environment.</div></div>'
     )
     return _page(
@@ -356,8 +327,9 @@ def _render_spirometry(bundle: dict) -> str:
         + '</div>'
         '<h3 class="section-heading">Volume comparison</h3>'
         '<div class="card chart-card">'
-        '<div class="chart-title"><strong>Measured expiratory volumes</strong><span>Litres</span></div>'
-        f'{_spirometry_svg(fev1, fvc)}'
+        '<div class="chart-title"><strong>Participant values and expected reference range</strong><span>Illustrative scale</span></div>'
+        f'{_spirometry_svg(fev1, fvc, fev1_over_fvc)}'
+        '<p class="clinical-note">The shaded band demonstrates how literature-based reference ranges can be displayed once age, sex, height, test quality, and the selected reference equation are available. Current marker positions show measured values on an illustrative scale, not a clinical classification.</p>'
         '</div>'
         + _task_note(bundle, "spirometry") +
         '<div class="disclosure"><button type="button">How to read spirometry values +</button><div class="disclosure-content">FEV1 is the air exhaled in the first second, FVC is total forced exhaled volume, and PEF is the fastest flow reached. Interpretation typically considers age, sex, height, reference equations, and test quality.</div></div>'
@@ -376,12 +348,33 @@ def _render_spirometry(bundle: dict) -> str:
 def _render_resting(bundle: dict) -> str:
     whole = bundle.get("whole", {})
     body = (
-        '<div class="grid grid-4">'
-        + _metric_card("Mean heart rate", whole.get("mean_HR"), "bpm")
-        + _metric_card("RMSSD", whole.get("RMSSD"), "ms")
-        + _metric_card("LF / HF ratio", whole.get("LF_HF_ratio"), "")
-        + _metric_card("Mean RR", whole.get("mean_RR"), "s", digits=4)
-        + '</div>'
+        '<div class="measure-groups">'
+        '<div class="card measure-group" style="--group-color:var(--accent-deep)"><h3>1. ECG measures</h3><div class="measure-list">'
+        + _measure_item("Mean heart rate", whole.get("mean_HR"), "bpm")
+        + _measure_item("Mean RR", whole.get("mean_RR"), "s", digits=4)
+        + _measure_item("RMSSD", whole.get("RMSSD"), "ms")
+        + _measure_item("LF / HF ratio", whole.get("LF_HF_ratio"))
+        + '</div></div>'
+        '<div class="card measure-group" style="--group-color:var(--success)"><h3>2. Blood pressure measures</h3><div class="measure-list">'
+        + _measure_item("Systolic", whole.get("mean_sysBP"), "mmHg")
+        + _measure_item("Mean arterial", whole.get("mean_MAP"), "mmHg")
+        + _measure_item("Diastolic", whole.get("mean_diaBP"), "mmHg")
+        + _measure_item("Source", "Continuous ABP", text_value=True)
+        + '</div></div>'
+        '<div class="card measure-group" style="--group-color:var(--respiratory)"><h3>3. Respiratory measures</h3><div class="measure-list">'
+        + _measure_item("End-tidal CO2", None, "mmHg")
+        + _measure_item("Tidal volume", None, "L")
+        + _measure_item("Minute ventilation", None, "L/min")
+        + _measure_item("Status", "Awaiting data", text_value=True)
+        + '</div></div>'
+        '<div class="card measure-group" style="--group-color:var(--doppler)"><h3>4. Doppler measures</h3><div class="measure-list">'
+        + _measure_item("Mean flow velocity", None, "cm/s")
+        + _measure_item("Pulsatility index", None)
+        + _measure_item("Laterality", None, text_value=True)
+        + _measure_item("Status", "Awaiting data", text_value=True)
+        + '</div></div>'
+        '</div>'
+        '<div class="legend"><span style="--legend-color:var(--accent-deep)">ECG / heart rate</span><span style="--legend-color:var(--success)">Blood pressure</span><span style="--legend-color:var(--respiratory)">Respiratory</span><span style="--legend-color:var(--doppler)">Doppler</span></div>'
         + _task_note(bundle, "rest") +
         '<div class="disclosure"><button type="button">About HRV measures +</button><div class="disclosure-content">RMSSD is a time-domain heart-rate-variability measure associated primarily with parasympathetic activity. LF/HF is often reported as a frequency-domain index; interpretation remains context dependent.</div></div>'
     )
@@ -390,38 +383,20 @@ def _render_resting(bundle: dict) -> str:
         "Section 03",
         "Resting cardiovascular",
         "04 / Resting state",
-        "Resting-state measurements summarize heart rhythm and arterial blood pressure during the recorded resting period. Figures provide context beyond the metric cards.",
+        "Resting measurements are organized by recording modality so that future respiratory and Doppler results can be inserted without changing the page structure.",
         body,
         "LC Study · Resting cardiovascular",
     )
 
 
 def _render_autonomic_overview(bundle: dict) -> str:
-    whole = bundle.get("whole", {})
     body = (
         '<div class="chapter-banner"><div><span class="eyebrow" style="color:oklch(78% .08 245)">One coherent chapter</span><h3 style="margin:8px 0 0;font:650 28px var(--font-display)">Response to posture, strain, and breathing</h3><p>Review the trends first, then the calculated indices and participant-oriented explanation.</p></div><div class="chapter-tests"><div>01 · Supine-to-stand response</div><div>02 · Valsalva maneuver</div><div>03 · Deep breathing response</div></div></div>'
-        '<div class="test-tabs" role="tablist"><button class="active" data-panel="auto-sts" type="button">Supine to stand</button><button data-panel="auto-val" type="button">Valsalva</button><button data-panel="auto-db" type="button">Deep breathing</button></div>'
-        '<div class="test-panel active" id="auto-sts"><div class="grid grid-3">'
-        + _metric_card("Delta HR", whole.get("delta_HR"), "bpm", digits=2, signed=True)
-        + _metric_card("Delta BP", whole.get("delta_BP"), "mmHg", digits=2, signed=True)
-        + _metric_card("Standing plateau HR", whole.get("plateau_HR"), "bpm")
-        + '</div></div>'
-        '<div class="test-panel" id="auto-val"><div class="grid grid-3">'
-        + _metric_card("Valsalva ratio", whole.get("Valsalva_ratio"), "")
-        + _metric_card("MAP phase II drop", None, "mmHg")
-        + _metric_card("MAP phase IV overshoot", None, "mmHg")
-        + '</div></div>'
-        '<div class="test-panel" id="auto-db"><div class="grid grid-3">'
-        + _metric_card("E:I ratio", whole.get("E_I_ratio"), "")
-        + _metric_card("Delta HR", whole.get("delta_HR_responses"), "bpm")
-        + _metric_card("Breathing cycles", None, "")
-        + '</div></div>'
-        '<h3 class="section-heading">Chapter structure</h3>'
-        '<div class="chapter-list">'
-        + _chapter_row("06", "Supine to stand", "Heart-rate and blood-pressure transition trends", "Ready", missing=not _task_present(bundle, "sts"))
-        + _chapter_row("07", "Valsalva", "Pressure and heart-rate waveforms by phase", "Waveforms", missing=not _task_present(bundle, "valsalva"))
-        + _chapter_row("08", "Deep breathing", "Respiratory sinus arrhythmia and E:I ratio", "Waveform", missing=not _task_present(bundle, "breathing"))
-        + '</div>'
+        '<div class="task-grid">'
+        '<div class="card task-card"><svg viewBox="0 0 180 118" role="img" aria-label="Person moving from lying on a bed to standing on the floor"><line class="axis" x1="8" y1="96" x2="172" y2="96"/><path class="task-stroke" d="M10 74h60v6H10zM14 80v10M66 80v10M10 74v-7h14"/><circle class="task-stroke" cx="20" cy="66" r="5"/><path class="task-stroke" d="M26 70h38"/><path class="task-secondary" d="M80 46c11-5 22-4 30 4m0 0-9-1m9 1-1 9"/><circle class="task-stroke" cx="140" cy="36" r="7"/><path class="task-stroke" d="M140 43v25m0-19-13 9m13-9 13 9m-13 10-9 19m9-19 9 19"/></svg><h3>Supine to stand</h3><p>Rest quietly while lying down, then stand when instructed while heart rate and blood pressure continue recording.</p></div>'
+        '<div class="card task-card"><svg viewBox="0 0 180 118" role="img" aria-label="Person blowing into a syringe"><path class="task-stroke" d="M46 20c-15 0-26 12-26 29 0 11 5 17 5 25 0 8-4 12-4 18 0 4 3 6 8 6h21"/><path class="task-stroke" d="M46 20c13 0 22 10 24 23 1 9-1 15-1 22"/><circle cx="55" cy="52" r="2.4" fill="var(--accent-deep)"/><path class="task-stroke" d="M42 40q7-4 13-1"/><path class="task-stroke" d="M63 67c-4 2-9 3-14 2"/><path class="task-secondary" d="M69 64q7-2 13 0"/><rect class="task-stroke" x="82" y="58" width="46" height="13" rx="1.5"/><path class="task-stroke" d="M94 58v13M106 58v13M118 58v13"/><path class="task-stroke" d="M128 61h9v7h-9M137 64.5h11M148 60v9"/></svg><h3>Valsalva maneuver</h3><p>Blow steadily into a syringe against resistance for the instructed interval, followed by recovery, while synchronized signals are recorded.</p></div>'
+        '<div class="card task-card"><svg viewBox="0 0 180 118" role="img" aria-label="Breathing cycle with an inhale circle and an exhale circle"><circle cx="52" cy="59" r="27" fill="none" stroke="var(--success)" stroke-width="5"/><path d="M52 32l6 6-6 6" fill="none" stroke="var(--success)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><text x="52" y="63" text-anchor="middle" fill="var(--success)" style="font:700 12px var(--font-mono)">inhale</text><circle cx="128" cy="59" r="27" fill="none" stroke="var(--danger)" stroke-width="5"/><path d="M128 86l-6-6 6-6" fill="none" stroke="var(--danger)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><text x="128" y="63" text-anchor="middle" fill="var(--danger)" style="font:700 12px var(--font-mono)">exhale</text></svg><h3>Deep breathing</h3><p>Follow paced inhale and exhale cues so breathing-linked changes in heart rate can be assessed.</p></div>'
+        '</div>'
     )
     return _page(
         "autonomic",
@@ -573,9 +548,6 @@ def build_report_html(bundle: dict, metadata: dict) -> str:
     return (
         template
         .replace("__REPORT_TITLE__", _escape(title))
-        .replace("__SUBJECT_LABEL__", _escape(_subject_label(sub_id)))
-        .replace("__SESSION_LABEL__", _escape(f"Session {_session_plain(ses_id)}"))
-        .replace("__REPORT_NAV__", _nav_html())
         .replace("__REPORT_BODY__", body)
     )
 

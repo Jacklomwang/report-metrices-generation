@@ -114,8 +114,17 @@
     .chart-label { fill: var(--muted); font: 9px var(--font-mono); }
     .bar { fill: var(--accent); }
     .bar-soft { fill: var(--accent-soft); }
-    .reference-range { fill: color-mix(in oklch, var(--success) 18%, white); }
-    .participant-tick { stroke: var(--accent-deep); stroke-width: 3; }
+    .spiro-track { fill: color-mix(in oklch, var(--border) 70%, white); }
+    .spiro-band { fill: oklch(55% 0.12 190 / 5%); stroke: oklch(55% 0.12 190 / 32%); stroke-width: 1; }
+    .spiro-marker { stroke: var(--accent-deep); stroke-width: 3; }
+    .spiro-offscale { fill: var(--accent-deep); }
+    .spiro-row-label { fill: var(--fg); font: 650 12px var(--font-display); }
+    .spiro-row-sub { fill: var(--muted); font: 400 10px var(--font-mono); }
+    .spiro-edge-label { fill: var(--muted); font: 600 9px var(--font-mono); }
+    .spiro-value { fill: var(--fg); font: 680 15px var(--font-display); }
+    .spiro-value-unit { fill: var(--muted); font: 500 9px var(--font-mono); }
+    .spiro-legend-rule { stroke: var(--border); stroke-width: 1; }
+    .spiro-legend-label { fill: var(--muted); font: 10.5px var(--font-body); }
     .clinical-note { margin: 12px 0 0; color: var(--muted); font-size: 10px; }
     .measure-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
     .measure-group { padding: 15px; }

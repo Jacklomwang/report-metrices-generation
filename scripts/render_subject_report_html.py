@@ -194,25 +194,106 @@ def _figure_card(title: str, subtitle: str, fig_path: str | None, alt: str) -> s
     )
 
 
-def _spirometry_svg(fev1, fvc, fev1_over_fvc) -> str:
-    fev1_val = _as_float(fev1)
-    fvc_val = _as_float(fvc)
-    ratio_val = _as_float(fev1_over_fvc)
+# Predicted-range (LLN/ULN) values come from merge_subject_all_metrics_only.py,
+# which looks them up per subject from the shared spirometry predicted-values CSV.
+# A row with no LLN/ULN for that subject (e.g. missing demographic data upstream)
+# falls back to showing just the value, no band.
+_SPIRO_ROWS = [
+    # key,     label,         sub label,               unit,   digits, whole LLN key,        whole ULN key
+    ("fev1",  "FEV1",       "first-second volume",    "L",   1, "FEV1_LLN",          "FEV1_ULN"),
+    ("fvc",   "FVC",        "forced vital capacity",  "L",   1, "FVC_LLN",           "FVC_ULN"),
+    ("ratio", "FEV1 / FVC", "calculated ratio",       "",    2, "FEV1_over_FVC_LLN", "FEV1_over_FVC_ULN"),
+]
 
-    def marker_x(value: float | None, maximum: float) -> float:
-        if value is None:
-            return 105.0
-        return 105.0 + max(0.0, min(1.0, value / maximum)) * 525.0
+# Band always occupies this fraction span of the track, aligned across every row.
+_SPIRO_BAND_START_FRAC = 4 / 6
+_SPIRO_BAND_END_FRAC = 5 / 6
 
-    fev1_x = marker_x(fev1_val, 6.0)
-    fvc_x = marker_x(fvc_val, 6.0)
-    ratio_x = marker_x(ratio_val, 1.2)
-    return f'''<svg class="chart" viewBox="0 0 700 220" role="img" aria-label="Participant spirometry values shown on an illustrative reference display">
-      <rect class="reference-range" x="350" y="35" width="245" height="132" rx="5"/>
-      <line class="axis" x1="105" y1="68" x2="630" y2="68"/><line class="axis" x1="105" y1="112" x2="630" y2="112"/><line class="axis" x1="105" y1="156" x2="630" y2="156"/>
-      <line class="participant-tick" x1="{fev1_x:.1f}" y1="56" x2="{fev1_x:.1f}" y2="80"/><line class="participant-tick" x1="{fvc_x:.1f}" y1="100" x2="{fvc_x:.1f}" y2="124"/><line class="participant-tick" x1="{ratio_x:.1f}" y1="144" x2="{ratio_x:.1f}" y2="168"/>
-      <text class="chart-label" x="30" y="72">FEV1</text><text class="chart-label" x="30" y="116">FVC</text><text class="chart-label" x="30" y="160">FEV1/FVC</text>
-      <text class="chart-label" x="340" y="194">lower reference</text><text class="chart-label" x="555" y="194">expected</text><text class="chart-label" x="430" y="28">illustrative healthy range</text>
+_SPIRO_TRACK_X0 = 150.0
+_SPIRO_TRACK_X1 = 610.0
+_SPIRO_ROW_TOP = 54.0
+_SPIRO_ROW_H = 56.0
+
+
+def _spiro_marker_frac(value: float | None, band_min: float, band_max: float) -> tuple[float, bool]:
+    """Return (clamped fraction along the track, whether the raw value was off-scale).
+
+    The band sits at [4/6, 5/6] of the track; to keep that fixed, the track's value
+    range extends 4x the band width to the left of the band and 1x to the right.
+    """
+    if value is None:
+        return _SPIRO_BAND_START_FRAC, False
+    range_width = band_max - band_min
+    if range_width <= 0:
+        return 0.5, False
+    track_min = band_min - 4 * range_width
+    track_max = band_max + range_width
+    frac = (value - track_min) / (track_max - track_min)
+    clamped = frac < 0.0 or frac > 1.0
+    return max(0.0, min(1.0, frac)), clamped
+
+
+def _spirometry_svg(fev1, fvc, fev1_over_fvc, whole: dict) -> str:
+    values = {"fev1": _as_float(fev1), "fvc": _as_float(fvc), "ratio": _as_float(fev1_over_fvc)}
+
+    band_x0 = _SPIRO_TRACK_X0 + _SPIRO_BAND_START_FRAC * (_SPIRO_TRACK_X1 - _SPIRO_TRACK_X0)
+    band_x1 = _SPIRO_TRACK_X0 + _SPIRO_BAND_END_FRAC * (_SPIRO_TRACK_X1 - _SPIRO_TRACK_X0)
+
+    rows_svg = []
+    for i, (key, label, sub_label, unit, digits, lln_key, uln_key) in enumerate(_SPIRO_ROWS):
+        value = values[key]
+        y = _SPIRO_ROW_TOP + i * _SPIRO_ROW_H
+        band_min = _as_float(whole.get(lln_key))
+        band_max = _as_float(whole.get(uln_key))
+        has_band = band_min is not None and band_max is not None and band_max > band_min
+
+        value_text = _format_number(value, digits) if value is not None else "—"
+        unit_text = f'<tspan class="spiro-value-unit"> {_escape(unit)}</tspan>' if unit else ""
+
+        if has_band:
+            frac, clamped = _spiro_marker_frac(value, band_min, band_max)
+            x = _SPIRO_TRACK_X0 + frac * (_SPIRO_TRACK_X1 - _SPIRO_TRACK_X0)
+
+            marker = ""
+            if value is not None:
+                if clamped:
+                    direction = -1 if x <= _SPIRO_TRACK_X0 else 1
+                    tip_x = x + direction * 9
+                    marker = (
+                        f'<polygon class="spiro-offscale" points="{x:.1f},{y-13:.1f} {x:.1f},{y+13:.1f} {tip_x:.1f},{y:.1f}"/>'
+                    )
+                else:
+                    marker = f'<line class="spiro-marker" x1="{x:.1f}" y1="{y-13:.1f}" x2="{x:.1f}" y2="{y+13:.1f}"/>'
+
+            rows_svg.append(f'''
+      <text class="spiro-row-label" x="20" y="{y-3:.1f}">{_escape(label)}</text>
+      <text class="spiro-row-sub" x="20" y="{y+11:.1f}">{_escape(sub_label)}</text>
+      <rect class="spiro-track" x="{_SPIRO_TRACK_X0:.1f}" y="{y-4:.1f}" width="{_SPIRO_TRACK_X1 - _SPIRO_TRACK_X0:.1f}" height="8" rx="4"/>
+      <rect class="spiro-band" x="{band_x0:.1f}" y="{y-8:.1f}" width="{band_x1 - band_x0:.1f}" height="16" rx="4"/>
+      <text class="spiro-edge-label" x="{band_x0:.1f}" y="{y+26:.1f}" text-anchor="middle">{_format_number(band_min, digits)}</text>
+      <text class="spiro-edge-label" x="{band_x1:.1f}" y="{y+26:.1f}" text-anchor="middle">{_format_number(band_max, digits)}</text>
+      {marker}
+      <text class="spiro-value" x="670" y="{y+4:.1f}" text-anchor="end">{value_text}{unit_text}</text>''')
+        else:
+            # No predicted range for this subject/metric (e.g. missing age/sex/height
+            # upstream) — show the value alone with a muted note instead of a track.
+            rows_svg.append(f'''
+      <text class="spiro-row-label" x="20" y="{y-3:.1f}">{_escape(label)}</text>
+      <text class="spiro-row-sub" x="20" y="{y+11:.1f}">{_escape(sub_label)}</text>
+      <text class="spiro-row-sub" x="{_SPIRO_TRACK_X0:.1f}" y="{y+4:.1f}">Predicted range unavailable</text>
+      <text class="spiro-value" x="670" y="{y+4:.1f}" text-anchor="end">{value_text}{unit_text}</text>''')
+
+    legend_y = _SPIRO_ROW_TOP + len(_SPIRO_ROWS) * _SPIRO_ROW_H + 6
+    legend_line_y = legend_y - 16
+    height = legend_y + 24
+
+    return f'''<svg class="chart" viewBox="0 0 700 {height:.0f}" role="img" aria-label="Participant spirometry values plotted against predicted values">
+      {"".join(rows_svg)}
+      <line class="spiro-legend-rule" x1="20" y1="{legend_line_y:.1f}" x2="680" y2="{legend_line_y:.1f}"/>
+      <line class="spiro-marker" x1="20" y1="{legend_y-4:.1f}" x2="20" y2="{legend_y+4:.1f}"/>
+      <text class="spiro-legend-label" x="30" y="{legend_y+4:.1f}">Participant value</text>
+      <rect class="spiro-band" x="170" y="{legend_y-6:.1f}" width="18" height="12" rx="3"/>
+      <text class="spiro-legend-label" x="196" y="{legend_y+4:.1f}">Predicted Values</text>
     </svg>'''
 
 
@@ -317,22 +398,25 @@ def _render_spirometry(bundle: dict) -> str:
     fev1 = whole.get("FEV1")
     fvc = whole.get("FVC")
     fev1_over_fvc = whole.get("FEV1_over_FVC")
-    pef = whole.get("PEF")
     body = (
-        '<div class="grid grid-4">'
+        '<div class="grid grid-3">'
         + _metric_card("FEV1", fev1, "L", "First-second volume")
         + _metric_card("FVC", fvc, "L", "Forced vital capacity")
         + _metric_card("FEV1 / FVC", fev1_over_fvc, "", "Calculated from reported values")
-        + _metric_card("PEF", pef, "L/s", "Peak expiratory flow")
         + '</div>'
         '<h3 class="section-heading">Volume comparison</h3>'
         '<div class="card chart-card">'
         '<div class="chart-title"><strong>Participant values and expected reference range</strong><span>Illustrative scale</span></div>'
-        f'{_spirometry_svg(fev1, fvc, fev1_over_fvc)}'
-        '<p class="clinical-note">The shaded band demonstrates how literature-based reference ranges can be displayed once age, sex, height, test quality, and the selected reference equation are available. Current marker positions show measured values on an illustrative scale, not a clinical classification.</p>'
+        f'{_spirometry_svg(fev1, fvc, fev1_over_fvc, whole)}'
+        '<p class="clinical-note">The shaded band represents the literature-predicted (Bowerman, 2022) values for the FVC maneuver, '
+        'based on demographic information. If it is not displayed, we may be missing some demographic information '
+        'from you (age, sex, or height). The vertical mark indicates where your result lies against the predicted '
+        'values, though it may be impacted by the quality of the spirometry maneuvers performed.</p>'
+        '<p class="clinical-note">This is not clinical advice. If you have any questions or concerns regarding '
+        'these results, please talk to a doctor.</p>'
         '</div>'
         + _task_note(bundle, "spirometry") +
-        '<div class="disclosure"><button type="button">How to read spirometry values +</button><div class="disclosure-content">FEV1 is the air exhaled in the first second, FVC is total forced exhaled volume, and PEF is the fastest flow reached. Interpretation typically considers age, sex, height, reference equations, and test quality.</div></div>'
+        '<div class="disclosure"><button type="button">How to read spirometry values +</button><div class="disclosure-content">FEV1 is the forced expiratory volume in one second and FVC is the forced vital capacity, and FEV1/FVC is a ratio typically used for clinical diagnosis of obstructed lung disorders. Interpretation typically considers age, sex, height, reference equations, and test quality. These results should not be substituted for medical advice; please consult a doctor if you have any concerns.</div></div>'
     )
     return _page(
         "spirometry",

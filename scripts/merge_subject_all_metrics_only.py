@@ -148,6 +148,83 @@ def _first_existing(*paths: Path) -> str:
     return str(paths[0]) if paths else ""
 
 
+# Spirometry results CSV — authoritative for both the measured FEV1/FVC/ratio and
+# their predicted LLN/ULN range. Supersedes run_spirometry_extract.py's device-CSV
+# extraction, which has a known column-matching bug for some subjects (it can pick
+# up a predicted/reference value instead of the actual repeat measurement). Usually
+# one row per subject; subjects with multiple rows are disambiguated by the
+# "Session_Number" column (see _load_spiro_from_csv).
+SPIRO_PREDICTED_CSV_PATH = Path("/export02/projects/LCS/03_spirometry/FVC_results.csv")
+
+_SPIRO_CSV_COLUMNS = {
+    # whole_key:            csv column
+    "FEV1": "FEV1",
+    "FVC": "FVC",
+    "FEV1_over_FVC": "FEV1/FVC",
+    "FEV1_LLN": "FEV1_LLN",
+    "FEV1_ULN": "FEV1_ULN",
+    "FVC_LLN": "FVC_LLN",
+    "FVC_ULN": "FVC_ULN",
+    "FEV1_over_FVC_LLN": "FEV1/FVC_LLN",
+    "FEV1_over_FVC_ULN": "FEV1/FVC_ULN",
+}
+
+
+def _load_spiro_from_csv(csv_path: Path, sub_id: str, ses: str | None = None) -> dict:
+    """Look up measured + predicted-range spirometry values for one subject/session.
+
+    Returns {} if the CSV or the subject's row is missing, so callers can fall
+    back to the older device-CSV extraction rather than erroring.
+
+    Most subjects have exactly one row. If a subject has more than one (multiple
+    sessions logged), we try to disambiguate using a "Session_Number" column matched
+    against `ses`; if that column is absent or doesn't resolve to a single row,
+    we fall back to the first matching row and print a warning, since silently
+    picking a row from a different session could show the wrong values.
+    """
+    if not csv_path.exists():
+        return {}
+    import pandas as pd
+
+    df = pd.read_csv(csv_path)
+    df.columns = [str(c).strip() for c in df.columns]
+    if "Subject_ID" not in df.columns:
+        return {}
+
+    matches = df[df["Subject_ID"].astype(str).str.strip() == sub_id]
+    if matches.empty:
+        return {}
+
+    if len(matches) > 1 and "Session_Number" in df.columns and ses is not None:
+        ses_matches = matches[matches["Session_Number"].astype(str).str.strip() == str(ses).strip()]
+        if not ses_matches.empty:
+            matches = ses_matches
+        else:
+            print(
+                f"[WARN] {sub_id} has {len(matches)} rows in {csv_path.name} but none "
+                f"match Session_Number={ses!r}; using the first row."
+            )
+
+    if len(matches) > 1:
+        print(
+            f"[WARN] {sub_id} has {len(matches)} ambiguous rows in {csv_path.name}; "
+            f"using the first row."
+        )
+
+    row = matches.iloc[0]
+
+    out = {}
+    for whole_key, csv_col in _SPIRO_CSV_COLUMNS.items():
+        if csv_col not in row or pd.isna(row[csv_col]):
+            out[whole_key] = np.nan
+            continue
+        try:
+            out[whole_key] = float(row[csv_col])
+        except Exception:
+            out[whole_key] = np.nan
+    return out
+
+
 def _first_present(d: dict, keys, default=np.nan):
     """Return the first present key from a dict, else default."""
     if not isinstance(d, dict):
@@ -275,14 +352,31 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
 
     # Spirometry
     sp = metrics_by_task.get("spirometry", {})
-    whole["FEV1"] = _first_present(sp, ["FEV1_max", "FEV1"], np.nan)
-    whole["FVC"] = _first_present(sp, ["FVC_max", "FVC"], np.nan)
+
+    # FVC_results.csv is authoritative when the subject is present in it (measured
+    # values + predicted LLN/ULN, all from the same pipeline). Only fall back to
+    # the device-CSV extraction (run_spirometry_extract.py) when the subject isn't
+    # in FVC_results.csv at all — that extraction path has a known bug where it can
+    # substitute a predicted/reference value for the actual measurement.
+    spiro_csv = _load_spiro_from_csv(SPIRO_PREDICTED_CSV_PATH, f"sub-{sub}", ses)
+
+    if spiro_csv:
+        for key in _SPIRO_CSV_COLUMNS:
+            whole[key] = spiro_csv.get(key, np.nan)
+    else:
+        whole["FEV1"] = _first_present(sp, ["FEV1_max", "FEV1"], np.nan)
+        whole["FVC"] = _first_present(sp, ["FVC_max", "FVC"], np.nan)
+        for key in ("FEV1_LLN", "FEV1_ULN", "FVC_LLN", "FVC_ULN", "FEV1_over_FVC_LLN", "FEV1_over_FVC_ULN"):
+            whole[key] = np.nan
+        fev1 = whole["FEV1"]
+        fvc = whole["FVC"]
+        whole["FEV1_over_FVC"] = (fev1 / fvc) if (np.isfinite(fvc) and fvc != 0) else np.nan
+
     whole["PEF"] = _first_present(sp, ["PEF_max", "PEF"], np.nan)
 
     fev1 = whole["FEV1"]
     fvc = whole["FVC"]
     whole["FVC_over_FEV1"] = (fvc / fev1) if (np.isfinite(fev1) and fev1 != 0) else np.nan
-    whole["FEV1_over_FVC"] = (fev1 / fvc) if (np.isfinite(fvc) and fvc != 0) else np.nan
 
     figs = {
         "REST_HR": _first_existing(base / "rest" / "resting_hr.png"),

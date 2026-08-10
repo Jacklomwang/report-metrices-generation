@@ -338,11 +338,14 @@ def _render_overview(bundle: dict, metadata: dict) -> str:
     ]
     if missing:
         notices.append(_notice("Incomplete source data", f"The following task outputs are currently missing or incomplete: {missing_text}.", kind="info"))
+    neuro_found = bool(isinstance(metadata, dict) and metadata.get("neuropsych", {}).get("found"))
+    if not neuro_found:
+        notices.append(_notice("Incomplete source data", "No neuropsychological assessment record was found for this subject in the source dataset.", kind="info"))
     if isinstance(metadata, dict) and metadata.get("_load_error"):
         notices.append(_notice("Metadata fallback", str(metadata["_load_error"]), kind="info"))
     report_map = (
         '<div class="chapter-list">'
-        + _chapter_row("02", "Cognitive testing", "MoCA score and reaction indices", "Separate page")
+        + _chapter_row("02", "Cognitive testing", "MoCA score and reaction indices", "Separate page", missing=not neuro_found)
         + _chapter_row("03", "Spirometry", "FVC, FEV1, ratio, and peak flow", "Separate page", missing=not _task_present(bundle, "spirometry"))
         + _chapter_row("04", "Resting cardiovascular", "Heart rate variability and blood pressure", "Figures added", missing=not _task_present(bundle, "rest"))
         + _chapter_row("05", "Autonomic testing", "Supine-to-stand, Valsalva, and deep breathing", "Grouped chapter", missing=not any(_task_present(bundle, k) for k in ["sts", "valsalva", "breathing"]))
@@ -365,8 +368,10 @@ def _render_cognitive(bundle: dict, metadata: dict) -> str:
     moca_total = neuro.get("MoCA_Total") if isinstance(neuro, dict) else None
     hero_value = _format_number(moca_total, 0)
     note = "Most recent MoCA value available in the source metadata. A single score is one point-in-time research measurement."
-    if _is_missing(moca_total):
-        note = "MoCA value is not currently available in the source metadata."
+    if not neuro.get("found"):
+        note = "This subject has no neuropsychological assessment on record in the source dataset."
+    elif _is_missing(moca_total):
+        note = "A neuropsych record exists for this subject, but the MoCA total is not filled in yet."
     body = (
         '<div class="score-band">'
         '<div class="card hero-score"><div>'

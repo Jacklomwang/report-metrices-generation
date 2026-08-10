@@ -17,6 +17,9 @@ PHENOTYPE_GROUP_INFO_LC_PATH = PHENOTYPE_BASE_PATH / 'Group_InfoSession_Data_LC.
 PHENOTYPE_TESTING_SCHEDULE_PATH = PHENOTYPE_BASE_PATH / 'Testing_Schedule_Sheet1.csv'
 PHENOTYPE_NOTES_SESSION_A_PATH = PHENOTYPE_BASE_PATH / 'LC_Experiments_Notes_v2_Session_A_Physio.csv'
 PHENOTYPE_NOTES_SESSION_B_PATH = PHENOTYPE_BASE_PATH / 'LC_Experiments_Notes_v2_Session_B_MRI.csv'
+# No stable-name symlink exists for this export (unlike the others above), so we glob
+# for the newest dated file each time instead of pointing at one fixed filename.
+PHENOTYPE_INTAKE_GLOB = 'IntakeForm_DATA_*.csv'
 
 CORE_NEUROPSYCH_FIELDS = [
     'DigitSpan_Forward',
@@ -409,6 +412,41 @@ def _load_redcap_metadata(path: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _resolve_latest_intake_path(base_path: Path, pattern: str) -> Path | None:
+    matches = sorted(base_path.glob(pattern))
+    return matches[-1] if matches else None
+
+
+def _load_intake_form(base_path: Path, pattern: str) -> dict[str, dict[str, Any]]:
+    path = _resolve_latest_intake_path(base_path, pattern)
+    if path is None or not path.exists():
+        return {}
+    rows = _read_rows_with_fallback(path)
+    if not rows:
+        return {}
+    header = rows[0]
+    idx = {name: i for i, name in enumerate(header)}
+
+    def _value(row: list[str], key: str) -> str:
+        pos = idx.get(key)
+        if pos is None or pos >= len(row):
+            return ''
+        return str(row[pos]).strip()
+
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows[1:]:
+        participant = normalize_participant_id(_value(row, 'redcap_survey_identifier'))
+        if not participant:
+            continue
+        out[participant] = {
+            'age': _coerce_scalar(_value(row, 'agee')),
+            'bmi': _sanitize_bmi_value(_value(row, 'bmi')),
+            'height_m': _safe_float(_value(row, 'height_m')),
+            'weight_kg': _safe_float(_value(row, 'weight_kg')),
+        }
+    return out
+
+
 def _load_group_info(path: Path) -> dict[str, dict[str, Any]]:
     if not path.exists():
         return {}
@@ -604,12 +642,16 @@ def _interpret_redcap_value(field_name: str, value: Any, definitions_map: dict[s
 
 
 def _resolve_neuropsych_summary(participant: str, neuro_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    source = neuro_map.get(participant, {})
-    if not source:
-        return {}
+    source = neuro_map.get(participant)
+    if source is None:
+        # Participant has no row at all in Group_Info_CC/LC, as opposed to having
+        # a row where MoCA_Total itself is blank. Callers use `found` to tell those
+        # two "missing" cases apart in the report.
+        return {'found': False, 'NP_Date': None, 'MoCA_Total': None, 'MoCA_Subscores': {}, 'CoreTests': {}}
     moca_subscores = {k: v for k, v in source.items() if k.startswith('MoCA_') and k != 'MoCA_Total'}
     core_tests = {k: source[k] for k in CORE_NEUROPSYCH_FIELDS if k in source}
     return {
+        'found': True,
         'NP_Date': source.get('NP_Date'),
         'MoCA_Total': source.get('MoCA_Total'),
         'MoCA_Subscores': moca_subscores,
@@ -650,6 +692,7 @@ def build_subject_metadata(participant: str, session: str, task: str) -> dict[st
     redcap_data = _load_redcap_metadata(PHENOTYPE_REDCAP_PATH)
     group_cc = _load_group_info(PHENOTYPE_GROUP_INFO_CC_PATH)
     group_lc = _load_group_info(PHENOTYPE_GROUP_INFO_LC_PATH)
+    intake_data = _load_intake_form(PHENOTYPE_BASE_PATH, PHENOTYPE_INTAKE_GLOB)
     schedule_data = _load_schedule_entries(PHENOTYPE_TESTING_SCHEDULE_PATH)
     notes_a_data = _load_experiment_notes_entries(PHENOTYPE_NOTES_SESSION_A_PATH)
     notes_b_data = _load_experiment_notes_entries(PHENOTYPE_NOTES_SESSION_B_PATH)
@@ -665,15 +708,28 @@ def build_subject_metadata(participant: str, session: str, task: str) -> dict[st
     redcap_entry = redcap_data.get(participant_id, {})
     group_cc_entry = group_cc.get(participant_id, {})
     group_lc_entry = group_lc.get(participant_id, {})
+    intake_entry = intake_data.get(participant_id, {})
 
-    bmi_value = _resolve_bmi_from_group_entry(group_cc_entry)
-    bmi_source = 'group_info_cc' if bmi_value is not None else None
+    # IntakeForm is the preferred source for age/BMI when the participant has a row
+    # there; the group-info/REDCap chain below is only a fallback for participants
+    # not yet in IntakeForm.
+    bmi_value = intake_entry.get('bmi')
+    bmi_source = 'intake_form' if bmi_value is not None else None
+    if bmi_value is None:
+        bmi_value = _resolve_bmi_from_group_entry(group_cc_entry)
+        bmi_source = 'group_info_cc' if bmi_value is not None else bmi_source
     if bmi_value is None:
         bmi_value = _resolve_bmi_from_group_entry(group_lc_entry)
         bmi_source = 'group_info_lc' if bmi_value is not None else bmi_source
     if bmi_value is None:
         bmi_value = _sanitize_bmi_value(redcap_entry.get('bmi'))
         bmi_source = 'redcap' if bmi_value is not None else None
+
+    age_value = intake_entry.get('age')
+    age_source = 'intake_form' if age_value is not None else None
+    if age_value is None:
+        age_value = redcap_entry.get('age')
+        age_source = 'redcap' if age_value is not None else None
 
     sex_asab_raw = redcap_entry.get('sex_asab')
     gender_raw = redcap_entry.get('gender')
@@ -700,7 +756,8 @@ def build_subject_metadata(participant: str, session: str, task: str) -> dict[st
         'sex_asab_label': sex_asab_label,
         'gender': gender_raw,
         'gender_label': gender_label,
-        'age': redcap_entry.get('age'),
+        'age': age_value,
+        'age_source': age_source,
         'bmi': bmi_value,
         'bmi_source': bmi_source,
         'ecg_configuration': ecg_configuration,
@@ -710,6 +767,7 @@ def build_subject_metadata(participant: str, session: str, task: str) -> dict[st
             'redcap_found': participant_id in redcap_data,
             'redcap_definitions_found': bool(redcap_definitions),
             'redcap_definitions_error': definitions_load_error,
+            'intake_found': participant_id in intake_data,
             'neuropsych_found': participant_id in neuro_map,
             'schedule_found': schedule_entry is not None,
             'session_notes_found': notes_entry is not None,

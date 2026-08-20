@@ -10,7 +10,7 @@ import numpy as np
 
 
 def run(cmd: list[str], allow_fail: bool = False) -> int:
-    print("\n[RUN]", " ".join(cmd))
+    print("\n[RUN]", " ".join(cmd), flush=True)
     try:
         subprocess.run(cmd, check=True)
         return 0
@@ -190,7 +190,7 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
         d = {k: v for k, v in d.items() if not k.startswith("__")}
         # sanitize
         d = _sanitize_for_matlab(d)
-        d["present"] = 1
+        d.setdefault("present", 1)
         d["metrics_path"] = str(p)
         metrics_by_task[task] = d
 
@@ -209,6 +209,16 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
     whole["mean_HR"] = rest.get("mean_HR", np.nan)
     whole["RMSSD"] = rest.get("RMSSD_ms", np.nan)  # already ms in your printouts
     whole["LF_HF_ratio"] = rest.get("LF_HF", np.nan)
+    whole["mean_br"] = rest.get("mean_br", np.nan)
+    whole["mean_etco2"] = rest.get("mean_etco2", np.nan)
+    whole["mean_tidal_volume_ml"] = rest.get("mean_tidal_volume_ml", np.nan)
+    whole["mean_tidal_volume_l"] = rest.get("mean_tidal_volume_l", np.nan)
+    whole["mean_minute_ventilation"] = rest.get("mean_minute_ventilation", np.nan)
+    whole["doppler_mean_peak"] = rest.get("doppler_mean_peak", np.nan)
+    whole["doppler_mean_trough"] = rest.get("doppler_mean_trough", np.nan)
+    whole["doppler_mean_flow"] = rest.get("doppler_mean_flow", np.nan)
+    whole["doppler_mean_quality"] = rest.get("doppler_mean_quality", np.nan)
+    whole["doppler_noisy_percent"] = rest.get("doppler_noisy_percent", np.nan)
 
     # STS mapping (you said all in sts_metrics.mat under sts folder)
     sts = metrics_by_task.get("sts", {})
@@ -224,6 +234,22 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
     # Valsalva mapping (NOW: only ratio needed)
     val = metrics_by_task.get("valsalva", {})
     whole["Valsalva_ratio"] = val.get("valsalva_ratio", np.nan)
+    whole["Valsalva_max_HR"] = val.get("best_hr_max", np.nan)
+    whole["Valsalva_min_HR"] = val.get("best_hr_min", np.nan)
+    whole["valsalva_baseline_sbp"] = val.get("baseline_sbp", np.nan)
+    whole["valsalva_baseline_map"] = val.get("baseline_map", np.nan)
+    whole["sbp_phase1_from_baseline"] = val.get("sbp_phase1_from_baseline", np.nan)
+    whole["sbp_phase2_early_fall"] = val.get("sbp_phase2_early_fall", np.nan)
+    whole["sbp_phase2_late_recovery"] = val.get("sbp_phase2_late_recovery", np.nan)
+    whole["sbp_phase3_drop"] = val.get("sbp_phase3_drop", np.nan)
+    whole["sbp_phase4_rise"] = val.get("sbp_phase4_rise", np.nan)
+    whole["map_phase1_from_baseline"] = val.get("map_phase1_from_baseline", np.nan)
+    whole["map_phase2_early_fall"] = val.get("map_phase2_early_fall", np.nan)
+    whole["map_phase2_late_recovery"] = val.get("map_phase2_late_recovery", np.nan)
+    whole["map_phase3_drop"] = val.get("map_phase3_drop", np.nan)
+    whole["map_phase4_rise"] = val.get("map_phase4_rise", np.nan)
+    whole["map_phase2_drop"] = val.get("map_phase2_drop", np.nan)
+    whole["map_phase4_overshoot"] = val.get("map_phase4_overshoot", np.nan)
 
     # Breathing mapping (your breathing script outputs mean_max/min, diff, ratio)
     br = metrics_by_task.get("breathing", {})
@@ -247,8 +273,8 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
     # (keep these here so MATLAB can just read them)
     figs = {
         "STS_HR_MAP": str(base / "sts" / "STS_HR_MAP_plot.png"),  # if your STS script writes there
-        "Valsalva_plot": str(base / "valsalva" / "valsalva_best_rep_hr.png"),
-        "DeepBreathing_plot": str(base / "breathing" / "breathing_hr_8to9min.png"),
+        "Valsalva_plot": str(base / "valsalva" / "valsalva_best_rep_hr_bp.png"),
+        "DeepBreathing_plot": str(base / "breathing" / "deep_breathing_HR_plot.png"),
     }
 
     out_path = base / f"sub-{sub}_ses-{ses}_all_metrics.mat"
@@ -267,7 +293,10 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Run ALL tasks for one subject/session (rest, STS, valsalva, breathing, spirometry) + merge."
+        description=(
+            "Process all tasks for one subject/session, merge the metrics, "
+            "and render the final HTML report."
+        )
     )
 
     ap.add_argument("--root", default="/export02/projects/LCS/01_physio", help="Root folder containing sub-*")
@@ -275,6 +304,7 @@ def main():
     ap.add_argument("--ses", default="1", help="Session number like 1 or 2")
     ap.add_argument("--out_root", default="derived", help="Output root folder (relative or absolute)")
     ap.add_argument("--one_based", action="store_true", help="Interpret channel numbers as 1-based")
+    ap.add_argument("--save", action="store_true", help=argparse.SUPPRESS)
 
     ap.add_argument(
         "--skip",
@@ -284,13 +314,14 @@ def main():
         help="Tasks to skip",
     )
 
-    ap.add_argument("--rest_ecg_ch", type=int, default=4, help="Rest ECG channel (default 6)")
-    ap.add_argument("--rest_bp_ch", type=int, default=10, help="Rest BP channel (default 10)")
+    ap.add_argument("--rest_ecg_ch", type=int, default=4, help=argparse.SUPPRESS)
+    ap.add_argument("--rest_bp_ch", type=int, default=10, help=argparse.SUPPRESS)
 
     ap.add_argument("--sts_ecg_ch", type=int, default=4, help="STS ECG channel (default 4)")
     ap.add_argument("--sts_bp_ch", type=int, default=10, help="STS BP channel (default 10)")
 
     ap.add_argument("--val_ecg_ch", type=int, default=4, help="Valsalva ECG channel (default 4)")
+    ap.add_argument("--val_bp_ch", type=int, default=10, help="Valsalva BP fallback channel (default 10)")
     ap.add_argument("--breath_ecg_ch", type=int, default=4, help="Breathing ECG channel (default 4)")
 
     ap.add_argument("--force_ppg", action="store_true", help="Force PPG for valsalva+breathing")
@@ -313,10 +344,7 @@ def main():
         cmd = [
             py, script_path("run_rest_acq.py"),
             "--root", args.root, "--sub", args.sub, "--ses", args.ses,
-            *common,
             "--save", "--out_root", args.out_root,
-            "--ecg_ch", str(args.rest_ecg_ch),
-            "--bp_ch", str(args.rest_bp_ch),
         ]
         run(cmd)
     else:
@@ -345,6 +373,7 @@ def main():
                 *common,
                 "--save", "--out_root", args.out_root,
                 "--ecg_ch", str(args.val_ecg_ch),
+                "--bp_ch", str(args.val_bp_ch),
             ]
             if args.force_ppg:
                 cmd += ["--force_ppg", "--ppg_ch", str(args.ppg_ch)]
@@ -386,11 +415,23 @@ def main():
     else:
         print("[SKIP] spirometry")
 
-    # MERGE
-    merge_to_all_metrics(out_root, args.sub, args.ses)
+    # Use the canonical merger so both transition MAT and active JSON bundles are written.
+    run([
+        py, script_path("merge_subject_all_metrics_only.py"),
+        "--out_root", args.out_root, "--sub", args.sub, "--ses", args.ses,
+    ])
 
-    print("\n[DONE] All requested tasks finished.")
-    print(f"[INFO] Outputs under: {out_root / f'sub-{args.sub}' / f'ses-{args.ses}'}")
+    # Render the active standalone HTML report from the merged JSON bundle.
+    run([
+        py, script_path("render_subject_report_html.py"),
+        "--out_root", args.out_root, "--sub", args.sub, "--ses", args.ses,
+    ])
+
+    subject_out = out_root / f"sub-{args.sub}" / f"ses-{args.ses}"
+    report_path = subject_out / f"sub-{args.sub}_ses-{args.ses}_report.html"
+    print("\n[DONE] Processing and report generation finished.")
+    print(f"[INFO] Outputs under: {subject_out}")
+    print(f"[INFO] HTML report: {report_path}")
 
 
 if __name__ == "__main__":

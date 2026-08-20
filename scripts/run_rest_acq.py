@@ -1,362 +1,384 @@
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
+import os
 import sys
-import numpy as np
+from pathlib import Path
+
 import bioread
 import neurokit2 as nk
+import numpy as np
 
-# ---- NumPy 2.x compatibility for NeuroKit2
 if not hasattr(np, "trapz") and hasattr(np, "trapezoid"):
     np.trapz = np.trapezoid
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.bp_processing import (
-    detect_calibration_artifacts,
-    detect_bp_peaks_custom,
-    detect_bp_troughs,
-    compute_bp_derived_from_peaks,
-)
+from src.physio_qc.metrics.blood_pressure import process_bp
+from src.physio_qc.metrics.doppler import calculate_doppler_metrics, process_doppler
+from src.physio_qc.metrics.ecg import process_ecg
+from src.physio_qc.metrics.etco2 import process_etco2
+from src.physio_qc.metrics.rsp import process_rsp
+from src.physio_qc.metrics.spirometry import process_breathmetrics
+from src.physio_qc.utils.conversions import convert_voltage_to_mmhg_co2
 
 
-def save_resting_hr_figure(out_png: Path, t: np.ndarray, hr_ts: np.ndarray):
-    import os
-    import matplotlib
-    if not os.environ.get("DISPLAY"):
-        matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    out_png.parent.mkdir(parents=True, exist_ok=True)
-
-    fig = plt.figure(figsize=(14, 4))
-    ax = plt.gca()
-    ax.plot(t, hr_ts, linewidth=0.8, label="HR (bpm)")
-    ax.set_title("Resting: Derived Heart Rate")
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("HR (bpm)")
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="best")
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=200, bbox_inches="tight")
-    plt.close(fig)
-
-
-def save_resting_bp_figure(out_png: Path, t: np.ndarray, sbp: np.ndarray, dbp: np.ndarray, mbp: np.ndarray):
-    import os
-    import matplotlib
-    if not os.environ.get("DISPLAY"):
-        matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    out_png.parent.mkdir(parents=True, exist_ok=True)
-
-    fig = plt.figure(figsize=(14, 4))
-    ax = plt.gca()
-    ax.plot(t, sbp, linewidth=0.8, label="SBP")
-    ax.plot(t, dbp, linewidth=0.8, label="DBP")
-    ax.plot(t, mbp, linewidth=0.9, label="MBP")
-    ax.set_title("Resting: Derived Blood Pressure (SBP/DBP/MBP)")
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Pressure (mmHg)")
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="best")
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=200, bbox_inches="tight")
-    plt.close(fig)
-
-
-
+ECG_PARAMS = {
+    "powerline": 60, "method": "neurokit", "peak_method": "neurokit",
+    "correct_artifacts": False, "calculate_quality": False, "rate_method": "monotone_cubic",
+    "lowcut": 0.5, "highcut": 45.0, "filter_type": "butterworth", "filter_order": 5,
+    "apply_lowcut": True, "apply_highcut": True,
+}
+BP_PARAMS = {
+    "filter_method": "bessel_25hz", "filter_order": 3, "cutoff_freq": 25,
+    "peak_method": "delineator", "prominence": 10, "detect_calibration": True,
+    "calibration_threshold": 0.1, "calibration_min_duration": 1.0, "calibration_padding": 0.4,
+}
+RSP_PARAMS = {
+    "method": "khodadad2018", "peak_method": "scipy", "rate_method": "monotone_cubic",
+    "amplitude_method": "robust", "lowcut": 0.05, "highcut": 3.0,
+    "filter_type": "butterworth", "filter_order": 5, "apply_lowcut": True,
+    "apply_highcut": True, "rvt_method": "none",
+}
+ETCO2_PARAMS = {
+    "peak_method": "diff", "min_peak_distance_s": 3.0, "min_prominence": 3.0,
+    "sg_window_s": 0.2, "sg_poly": 2, "prom_adapt": False, "smooth_peaks": 3,
+}
+SPIROMETER_PARAMS = {
+    "data_type": "humanAirflow", "zscore": 0, "baseline_method": "sliding",
+    "simplify": 1, "verbose": 0, "exclude_outliers": 0, "volume_outlier_sd": 3.0,
+    "exclude_duration_outliers": 0, "duration_outlier_sd": 3.0,
+}
+DOPPLER_PARAMS = {
+    "filter_method": "sg_wavelet", "filter_order": 3, "cutoff_freq": 25,
+    "lowcut": 0.5, "highcut": 15.0, "apply_lowcut": True, "apply_highcut": True,
+    "sg_win": 0.1, "wavelet": "db6", "level": 10, "alpha": 4.0,
+    "drop_levels": 1, "trend_win": 2.0,
+}
 
 
 def build_rest_acq_path(root: Path, sub_code: str, ses_num: str) -> Path:
-    sub_id = f"sub-{sub_code}"
-    ses_id = f"ses-{ses_num}"
+    sub_id, ses_id = f"sub-{sub_code}", f"ses-{ses_num}"
     ses_dir = root / sub_id / ses_id
-
-    expected = ses_dir / f"{sub_id}_{ses_id}_task-rest_physio.acq"
-    if expected.exists():
-        return expected
-
-    cands = sorted(ses_dir.glob(f"{sub_id}_{ses_id}_task-rest*physio*.acq"))
-    if cands:
-        return cands[0]
-
-    cands = sorted(ses_dir.glob("*task-rest*physio*.acq"))
-    if cands:
-        return cands[0]
-
-    cands = sorted(ses_dir.glob("*rest*.acq"))
-    if cands:
-        return cands[0]
-
+    for pattern in (
+        f"{sub_id}_{ses_id}_task-rest_physio.acq",
+        f"{sub_id}_{ses_id}_task-rest*physio*.acq",
+        "*task-rest*physio*.acq", "*rest*.acq",
+    ):
+        candidates = sorted(ses_dir.glob(pattern))
+        if candidates:
+            return candidates[0]
     raise FileNotFoundError(f"No resting .acq found under: {ses_dir}")
 
 
-def pick_channel_by_index(channels, ch_num: int, one_based: bool):
-    idx = ch_num - 1 if one_based else ch_num
-    if idx < 0 or idx >= len(channels):
-        raise RuntimeError(
-            f"Channel out of range: requested {ch_num} ({'1-based' if one_based else '0-based'}), "
-            f"but file has {len(channels)} channels."
-        )
-    return channels[idx], idx
+def _name(channel) -> str:
+    return str(getattr(channel, "name", "") or "")
 
 
-def plot_qc(sub_id: str, ses_id: str, fs: float,
-            ecg: np.ndarray, rpeaks: np.ndarray,
-            bp_raw: np.ndarray, bp_filt: np.ndarray,
-            sys_peaks: np.ndarray, dia_troughs: np.ndarray,
-            cal_idx1: list[int], cal_idx2: list[int],
-            max_seconds: float = 60.0,
-            outdir: Path | None = None):
-    """
-    QC plot: first `max_seconds` seconds of ECG and BP with detected points.
-    If display not available, save png and print path.
-    """
-    import os
+def _find_channel(channels, patterns, excluded=()):
+    for index, channel in enumerate(channels):
+        name = _name(channel).lower()
+        if any(term in name for term in patterns) and not any(term in name for term in excluded):
+            return channel, index
+    return None, None
+
+
+def detect_channels(channels):
+    """Apply Physio-QC name patterns, including the study's A-channel fallbacks."""
+    return {
+        "ecg": _find_channel(channels, ("ecg", "ekg", "cardiac", "heart")),
+        # Do not use a bare "bp" substring: it would select the NIBP rate channel
+        # before the continuous A10 pressure waveform in standard LCS files.
+        "bp": _find_channel(channels, ("blood_pressure", "arterial_pressure", "abp", "a10", "a 10")),
+        "rsp": _find_channel(
+            channels, ("rsp", "resp", "respiratory", "breathing", "breath"),
+            excluded=("pneumotach", "respflow", "maskflow", "mask_flow"),
+        ),
+        "spirometer": _find_channel(
+            channels, ("spirometer", "spiro", "pneumotach", "respflow", "maskflow", "mask_flow")
+        ),
+        "etco2": _find_channel(channels, ("co2", "etco2", "carbon_dioxide", "a8", "a 8")),
+        "doppler": _find_channel(channels, ("doppler", "a6", "a 6", "a5", "a 5")),
+    }
+
+
+def _legacy_channel(channels, number: int | None, one_based: bool):
+    if number is None:
+        return None, None
+    index = number - 1 if one_based else number
+    return (channels[index], index) if 0 <= index < len(channels) else (None, None)
+
+
+def _finite_mean(values) -> float:
+    values = np.asarray(values, dtype=float).ravel()
+    values = values[np.isfinite(values)]
+    return float(np.mean(values)) if values.size else np.nan
+
+
+def compute_doppler_noisy_windows(
+    signal_length, sampling_rate, trough_indices, beat_quality_scores,
+    window_sec=10.0, step_sec=5.0, quality_threshold=0.8,
+):
+    """Classify windows using Physio-QC's time-weighted beat-quality rule."""
+    noisy_mask = np.zeros(max(int(signal_length), 0), dtype=bool)
+    if signal_length <= 0 or sampling_rate <= 0:
+        return [], noisy_mask
+    troughs = np.sort(np.asarray(trough_indices, dtype=int).ravel())
+    troughs = troughs[(troughs >= 0) & (troughs < signal_length)]
+    scores = np.asarray(beat_quality_scores, dtype=float).ravel()
+    n_beats = min(len(scores), max(len(troughs) - 1, 0))
+    if n_beats <= 0:
+        return [], noisy_mask
+    beat_starts = troughs[:n_beats] / sampling_rate
+    beat_ends = troughs[1:n_beats + 1] / sampling_rate
+    scores = scores[:n_beats]
+    duration = max(0.0, (signal_length - 1.0) / sampling_rate)
+    noisy_windows, start_t = [], 0.0
+    while start_t < duration:
+        end_t = min(start_t + window_sec, duration)
+        overlap = np.maximum(0.0, np.minimum(beat_ends, end_t) - np.maximum(beat_starts, start_t))
+        valid = (overlap > 0) & np.isfinite(scores)
+        if np.any(valid):
+            quality = float(np.sum(scores[valid] * overlap[valid]) / np.sum(overlap[valid]))
+            if quality < quality_threshold:
+                noisy_windows.append((start_t, end_t))
+                first = max(0, int(np.floor(start_t * sampling_rate)))
+                last = min(signal_length, int(np.ceil(end_t * sampling_rate)))
+                noisy_mask[first:last] = True
+        start_t += step_sec
+    return noisy_windows, noisy_mask
+
+
+def _clean_doppler_metrics(result, sampling_rate, quality_threshold):
+    filtered = np.asarray(result["filtered"], dtype=float)
+    peaks = np.asarray(result["current_peaks"], dtype=int)
+    troughs = np.asarray(result["current_troughs"], dtype=int)
+    scores = np.asarray(result.get("beat_scores", []), dtype=float)
+    windows, noisy_mask = compute_doppler_noisy_windows(
+        len(filtered), sampling_rate, troughs, scores, quality_threshold=quality_threshold
+    )
+    clean_peaks = peaks[~noisy_mask[peaks]]
+    clean_troughs = troughs[~noisy_mask[troughs]]
+    metrics = calculate_doppler_metrics(filtered, clean_peaks, clean_troughs, sampling_rate)
+    n_beats = min(len(scores), max(len(troughs) - 1, 0))
+    clean_scores = []
+    for index in range(n_beats):
+        start, end = max(0, troughs[index]), min(len(noisy_mask), troughs[index + 1])
+        if end > start and not np.any(noisy_mask[start:end]) and np.isfinite(scores[index]):
+            clean_scores.append(scores[index])
+    metrics.update({
+        "peaks": clean_peaks, "troughs": clean_troughs,
+        "mean_quality": _finite_mean(clean_scores),
+        "noisy_windows": np.asarray(windows, dtype=float).reshape((-1, 2)),
+        "noisy_percent": float(100.0 * np.mean(noisy_mask)) if noisy_mask.size else np.nan,
+    })
+    return metrics
+
+
+def save_resting_figures(task_out: Path, fs: float, ecg_result, bp_result):
+    import matplotlib
+    if not os.environ.get("DISPLAY"):
+        matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-
-    n = len(ecg)
-    nmax = min(n, int(max_seconds * fs))
-    t = np.arange(nmax) / fs
-
-    ecg_seg = ecg[:nmax]
-    bp_raw_seg = bp_raw[:nmax]
-    bp_filt_seg = bp_filt[:nmax]
-
-    rpeaks_seg = rpeaks[(rpeaks >= 0) & (rpeaks < nmax)]
-    sys_seg = sys_peaks[(sys_peaks >= 0) & (sys_peaks < nmax)]
-    dia_seg = dia_troughs[(dia_troughs >= 0) & (dia_troughs < nmax)]
-
-    fig = plt.figure(figsize=(14, 8))
-
-    ax1 = plt.subplot(2, 1, 1)
-    ax1.plot(t, ecg_seg, linewidth=0.8)
-    if len(rpeaks_seg):
-        ax1.plot(rpeaks_seg / fs, ecg[rpeaks_seg], "rx", markersize=6, label="R-peaks")
-        ax1.legend(loc="upper right")
-    ax1.set_title(f"{sub_id} {ses_id} - ECG (first {max_seconds:.0f}s)")
-    ax1.set_xlabel("Time (s)")
-    ax1.set_ylabel("ECG")
-    ax1.grid(True, alpha=0.3)
-
-    ax2 = plt.subplot(2, 1, 2)
-    ax2.plot(t, bp_raw_seg, linewidth=0.6, label="BP raw")
-    ax2.plot(t, bp_filt_seg, linewidth=0.9, label="BP filt (40Hz)")
-    if len(sys_seg):
-        ax2.plot(sys_seg / fs, bp_filt[sys_seg], "r^", markersize=5, label="SBP peaks")
-    if len(dia_seg):
-        ax2.plot(dia_seg / fs, bp_filt[dia_seg], "bv", markersize=5, label="DBP troughs")
-
-    # shade calibration segments (only those that overlap nmax)
-    for s, e in zip(cal_idx1, cal_idx2):
-        if s >= nmax:
-            continue
-        ss = max(0, s) / fs
-        ee = min(nmax, e) / fs
-        ax2.axvspan(ss, ee, alpha=0.15)
-
-    ax2.set_title(f"{sub_id} {ses_id} - BP with detections (first {max_seconds:.0f}s)")
-    ax2.set_xlabel("Time (s)")
-    ax2.set_ylabel("BP")
-    ax2.grid(True, alpha=0.3)
-    ax2.legend(loc="upper right")
-
-    plt.tight_layout()
-
-    # Try show; if no DISPLAY, save fallback
-    has_display = bool(os.environ.get("DISPLAY"))
-    if has_display:
-        plt.show()
-    else:
-        if outdir is None:
-            outdir = Path("outputs")
-        outdir.mkdir(parents=True, exist_ok=True)
-        outpath = outdir / f"qc_{sub_id}_{ses_id}.png"
-        fig.savefig(outpath, dpi=150)
-        print(f"[INFO] No DISPLAY detected; saved QC plot to: {outpath}")
+    if ecg_result:
+        time = np.arange(len(ecg_result["hr_interpolated"])) / fs
+        fig, ax = plt.subplots(figsize=(14, 4))
+        ax.plot(time, ecg_result["hr_interpolated"], linewidth=0.8)
+        ax.set(title="Resting: Derived Heart Rate", xlabel="Time (s)", ylabel="HR (bpm)")
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(task_out / "resting_hr.png", dpi=200, bbox_inches="tight")
+        plt.close(fig)
+    if bp_result:
+        fig, ax = plt.subplots(figsize=(14, 4))
+        time = bp_result["time_4hz"]
+        ax.plot(time, bp_result["sbp_4hz"], linewidth=0.8, label="SBP")
+        ax.plot(time, bp_result["dbp_4hz"], linewidth=0.8, label="DBP")
+        ax.plot(time, bp_result["map_4hz"], linewidth=0.9, label="MAP")
+        ax.set(title="Resting: Derived Blood Pressure", xlabel="Time (s)", ylabel="Pressure (mmHg)")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best")
+        fig.tight_layout()
+        fig.savefig(task_out / "resting_BP.png", dpi=200, bbox_inches="tight")
+        plt.close(fig)
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Resting-state: derive indices from .acq")
-    ap.add_argument("--root", default="/export02/projects/LCS/01_physio")
-    ap.add_argument("--sub", required=True, help="Subject code like 2062")
-    ap.add_argument("--ses", default="1", help="Session number like 1 or 2")
+    parser = argparse.ArgumentParser(description="Process all resting-state report metrics from an ACQ file")
+    parser.add_argument("--root", default="/export02/projects/LCS/01_physio")
+    parser.add_argument("--sub", required=True, help="Subject code, for example 2062")
+    parser.add_argument("--ses", default="1", help="Session number")
+    parser.add_argument("--out_root", default="derived")
+    parser.add_argument("--save", action="store_true", help="Save MAT metrics and QC figures")
+    parser.add_argument("--no_save", action="store_true", help="Process without writing outputs")
+    parser.add_argument("--ecg_method", default="neurokit", help="ECG cleaning method; peak detection remains NeuroKit")
+    parser.add_argument("--doppler_quality_threshold", type=float, default=0.8)
+    parser.add_argument("--ecg_ch", type=int, help="Deprecated fallback when ECG name detection fails")
+    parser.add_argument("--bp_ch", type=int, help="Deprecated fallback when BP name detection fails")
+    parser.add_argument("--one_based", action="store_true", help="Interpret deprecated fallback channels as 1-based")
+    args = parser.parse_args()
 
-    ap.add_argument("--ecg_ch", type=int, required=True, help="ECG channel number")
-    ap.add_argument("--bp_ch", type=int, required=True, help="BP channel number")
-    ap.add_argument("--one_based", action="store_true", help="Interpret channel numbers as 1-based")
-    ap.add_argument("--ecg_method", default="neurokit", help="NeuroKit ECG processing method")
+    sub_id, ses_id = f"sub-{args.sub}", f"ses-{args.ses}"
+    task_out = Path(args.out_root) / sub_id / ses_id / "rest"
+    acq_path = build_rest_acq_path(Path(args.root), args.sub, args.ses)
+    print(f"[INFO] Subject: {sub_id}  Session: {ses_id}\n[INFO] Rest ACQ: {acq_path}")
+    acq = bioread.read_file(str(acq_path))
+    fs = float(acq.samples_per_second)
+    detected = detect_channels(acq.channels)
+    if detected["ecg"][0] is None:
+        detected["ecg"] = _legacy_channel(acq.channels, args.ecg_ch, args.one_based)
+    if detected["bp"][0] is None:
+        detected["bp"] = _legacy_channel(acq.channels, args.bp_ch, args.one_based)
+    print(f"[INFO] Sampling rate: {fs} Hz  |  Channels: {len(acq.channels)}")
+    for modality, (channel, index) in detected.items():
+        label = f"index={index} name={_name(channel)}" if channel is not None else "not found"
+        print(f"[INFO] {modality.upper():10s} {label}")
 
-    ap.add_argument("--bp_prominence", type=float, default=20.0)
-    ap.add_argument("--cal_thr", type=float, default=0.1)
-    ap.add_argument("--cal_min_dur", type=float, default=0.65)
+    metrics = {"fs": fs, "sub_id": sub_id, "ses_id": ses_id, "acq_path": str(acq_path),
+               "processing_source": "vendored_physio_qc_d56fa44"}
+    for modality, (channel, _) in detected.items():
+        metrics[f"channel_{modality}"] = _name(channel) if channel is not None else ""
+    ecg_result = bp_result = None
 
-    ap.add_argument("--no_save", action="store_true", help="Do not save any .mat files")
-    ap.add_argument("--out_root", default="derived", help="Root folder to save outputs under this project")
-    ap.add_argument("--save", action="store_true", help="Save metrics to a single .mat file")
-
-    ap.add_argument("--plot", action="store_true", help="Show QC plots (falls back to saving png if no DISPLAY)")
-    ap.add_argument("--plot_seconds", type=float, default=60.0, help="Seconds to plot for QC")
-    ap.add_argument("--plot_outdir", default="outputs", help="Where to save plot if no DISPLAY")
-
-    args = ap.parse_args()
-
-    root = Path(args.root)
-    sub_id = f"sub-{args.sub}"
-    ses_id = f"ses-{args.ses}"
-    out_root = Path(args.out_root)
-    task_out = out_root / sub_id / ses_id / "rest"
-    task_out.mkdir(parents=True, exist_ok=True)
-    out_mat = task_out / "rest_metrics.mat"
-
-
-    acq_path = build_rest_acq_path(root, args.sub, args.ses)
-    print(f"[INFO] Subject: {sub_id}  Session: {ses_id}")
-    print(f"[INFO] Rest ACQ: {acq_path}")
-
-    d = bioread.read_file(str(acq_path))
-    fs = float(d.samples_per_second)
-    print(f"[INFO] Sampling rate: {fs} Hz  |  Channels: {len(d.channels)}")
-
-    ecg_ch, ecg_idx = pick_channel_by_index(d.channels, args.ecg_ch, args.one_based)
-    bp_ch, bp_idx = pick_channel_by_index(d.channels, args.bp_ch, args.one_based)
-    print(f"[INFO] ECG channel index={ecg_idx} name={getattr(ecg_ch,'name','')}")
-    print(f"[INFO]  BP channel index={bp_idx} name={getattr(bp_ch,'name','')}")
-
-    ecg = np.asarray(ecg_ch.data, dtype=float)
-    bp_raw = np.asarray(bp_ch.data, dtype=float)
-
-    # ---- BP
-    idx1, idx2, bp_filt, dp = detect_calibration_artifacts(
-        bp_raw, fs, thr=args.cal_thr, min_duration_sec=args.cal_min_dur, debug=False
-    )
-    mask_cal = np.zeros(len(bp_filt), dtype=bool)
-    for s, e in zip(idx1, idx2):
-        mask_cal[s:e + 1] = True
-
-    peaks = detect_bp_peaks_custom(
-        bp_filt, fs, mask_cal=mask_cal, prominence=args.bp_prominence, min_distance_sec=0.4
-    )
-    troughs = detect_bp_troughs(bp_filt, fs, peaks)
-
-    t = np.arange(len(bp_filt)) / fs
-    derived = compute_bp_derived_from_peaks(bp_filt, t, peaks, troughs)
-
-    map_interp = derived["MBP"]
-    systolic_interp = derived["SBP"]
-    diastolic_interp = derived["DBP"]
-
-    mean_MAP = float(np.nanmean(map_interp)) if len(map_interp) else np.nan
-    mean_sysBP = float(np.nanmean(systolic_interp)) if len(systolic_interp) else np.nan
-    mean_diaBP = float(np.nanmean(diastolic_interp)) if len(diastolic_interp) else np.nan
-    mean_pulseBP = float(mean_sysBP - mean_diaBP) if np.isfinite(mean_sysBP) and np.isfinite(mean_diaBP) else np.nan
-
-    # ---- ECG/HRV
-    # Keep peak detection method fixed (neurokit); only vary cleaning method.
-    ecg_clean = nk.ecg_clean(ecg, sampling_rate=fs, method=args.ecg_method)
-    _, info = nk.ecg_peaks(ecg_clean, sampling_rate=fs, method="neurokit")
-    rpeaks = np.asarray(info.get("ECG_R_Peaks", []), dtype=int)
-
-    # sample-aligned HR time series (same length as ECG)
-    if len(rpeaks) >= 2:
-        hr_ts = nk.signal_rate(rpeaks, sampling_rate=fs, desired_length=len(ecg))
-    else:
-        hr_ts = np.full(len(ecg), np.nan)
-    t_ecg = np.arange(len(ecg)) / fs
-
-    if len(rpeaks) < 3:
-        mean_RR = np.nan
-        mean_HR = np.nan
-        RMSSD_ms = np.nan
-        LF_HF_ratio = np.nan
-    else:
-        rr_s = np.diff(rpeaks) / fs
-        rr_s = rr_s[(rr_s >= 0.3) & (rr_s <= 2.0)]
-        mean_RR = float(np.nanmean(rr_s)) if len(rr_s) else np.nan
-        mean_HR = float(60.0 / mean_RR) if np.isfinite(mean_RR) and mean_RR > 0 else np.nan
-
+    channel = detected["ecg"][0]
+    try:
+        if channel is None:
+            raise ValueError("ECG channel not found")
+        params = {**ECG_PARAMS, "method": args.ecg_method, "cleaning_method": args.ecg_method}
+        ecg_result = process_ecg(np.asarray(channel.data, dtype=float), fs, params)
+        if not ecg_result or ecg_result["n_peaks"] < 3:
+            raise ValueError("insufficient R-peaks")
+        rpeaks = np.asarray(ecg_result["current_r_peaks"], dtype=int)
+        rr = np.diff(rpeaks) / fs
+        rr = rr[(rr >= 0.3) & (rr <= 2.0)]
         hrv_time = nk.hrv_time(rpeaks, sampling_rate=fs, show=False)
-        RMSSD_ms = float(hrv_time["HRV_RMSSD"].iloc[0]) if "HRV_RMSSD" in hrv_time else np.nan
+        hrv_frequency = nk.hrv_frequency(rpeaks, sampling_rate=fs, show=False)
+        metrics.update({"mean_RR": _finite_mean(rr), "mean_HR": _finite_mean(ecg_result["hr_bpm"]),
+                        "RMSSD_ms": float(hrv_time["HRV_RMSSD"].iloc[0]),
+                        "LF_HF": float(hrv_frequency["HRV_LFHF"].iloc[0]),
+                        "n_rpeaks": int(len(rpeaks)), "rpeaks": rpeaks.astype(np.int32),
+                        "ecg_status": "available"})
+    except Exception as exc:
+        print(f"[WARN] ECG processing unavailable: {exc}")
+        metrics.update({"mean_RR": np.nan, "mean_HR": np.nan, "RMSSD_ms": np.nan, "LF_HF": np.nan,
+                        "n_rpeaks": 0, "rpeaks": np.array([], dtype=np.int32), "ecg_status": str(exc)})
 
-        hrv_freq = nk.hrv_frequency(rpeaks, sampling_rate=fs, show=False)
-        lf = float(hrv_freq["HRV_LF"].iloc[0]) if "HRV_LF" in hrv_freq else np.nan
-        hf = float(hrv_freq["HRV_HF"].iloc[0]) if "HRV_HF" in hrv_freq else np.nan
-        LF_HF_ratio = float(lf / hf) if np.isfinite(lf) and np.isfinite(hf) and hf != 0 else np.nan
+    channel = detected["bp"][0]
+    try:
+        if channel is None:
+            raise ValueError("blood-pressure channel not found")
+        bp_result = process_bp(np.asarray(channel.data, dtype=float), fs, BP_PARAMS)
+        if not bp_result:
+            raise ValueError("insufficient BP peaks/troughs")
+        peaks = np.asarray(bp_result["current_peaks"], dtype=int)
+        troughs = np.asarray(bp_result["current_troughs"], dtype=int)
+        metrics.update({"mean_MAP": float(bp_result["mean_mbp"]), "mean_sysBP": float(bp_result["mean_sbp"]),
+                        "mean_diaBP": float(bp_result["mean_dbp"]),
+                        "mean_pulseBP": float(bp_result["mean_sbp"] - bp_result["mean_dbp"]),
+                        "n_peaks": int(len(peaks)), "n_troughs": int(len(troughs)),
+                        "bp_peaks": peaks.astype(np.int32), "bp_troughs": troughs.astype(np.int32),
+                        "bp_status": "available"})
+    except Exception as exc:
+        print(f"[WARN] BP processing unavailable: {exc}")
+        metrics.update({"mean_MAP": np.nan, "mean_sysBP": np.nan, "mean_diaBP": np.nan,
+                        "mean_pulseBP": np.nan, "n_peaks": 0, "n_troughs": 0,
+                        "bp_peaks": np.array([], dtype=np.int32), "bp_troughs": np.array([], dtype=np.int32),
+                        "bp_status": str(exc)})
 
-    # ---- Print derived indices
+    channel = detected["rsp"][0]
+    try:
+        if channel is None:
+            raise ValueError("respiration channel not found")
+        result = process_rsp(np.asarray(channel.data, dtype=float), fs, RSP_PARAMS)
+        if not result:
+            raise ValueError("insufficient respiratory cycles")
+        metrics.update({"mean_br": float(result["mean_br"]), "std_br": float(result["std_br"]),
+                        "n_breaths_rsp": int(result["n_breaths"]), "rsp_status": "available"})
+    except Exception as exc:
+        print(f"[WARN] RSP processing unavailable: {exc}")
+        metrics.update({"mean_br": np.nan, "std_br": np.nan, "n_breaths_rsp": 0, "rsp_status": str(exc)})
+
+    channel = detected["etco2"][0]
+    try:
+        if channel is None:
+            raise ValueError("CO2 channel not found")
+        co2 = np.asarray(channel.data, dtype=float)
+        if "mmhg" not in _name(channel).lower():
+            co2 = convert_voltage_to_mmhg_co2(co2)
+        result = process_etco2(co2, fs, ETCO2_PARAMS)
+        metrics.update({"mean_etco2": _finite_mean(result["etco2_envelope"]),
+                        "n_etco2_peaks": int(len(result["current_peaks"])), "etco2_status": "available"})
+    except Exception as exc:
+        print(f"[WARN] ETCO2 processing unavailable: {exc}")
+        metrics.update({"mean_etco2": np.nan, "n_etco2_peaks": 0, "etco2_status": str(exc)})
+
+    channel = detected["spirometer"][0]
+    try:
+        if channel is None:
+            raise ValueError("pneumotach/spirometer channel not found")
+        result = process_breathmetrics(np.asarray(channel.data, dtype=float), fs, SPIROMETER_PARAMS)
+        if not result:
+            raise ValueError("BreathMetrics processing failed")
+        tidal_ml = float(result.get("mean_tidal_volume", np.nan))
+        metrics.update({"mean_tidal_volume_ml": tidal_ml,
+                        "mean_tidal_volume_l": tidal_ml / 1000.0 if np.isfinite(tidal_ml) else np.nan,
+                        "mean_minute_ventilation": float(result.get("mean_minute_ventilation", np.nan)),
+                        "n_breaths_flow": int(result.get("n_breaths", 0)), "spirometer_status": "available"})
+    except Exception as exc:
+        print(f"[WARN] Respiratory-flow processing unavailable: {exc}")
+        metrics.update({"mean_tidal_volume_ml": np.nan, "mean_tidal_volume_l": np.nan,
+                        "mean_minute_ventilation": np.nan, "n_breaths_flow": 0,
+                        "spirometer_status": str(exc)})
+
+    channel = detected["doppler"][0]
+    try:
+        if channel is None:
+            raise ValueError("Doppler channel not found")
+        result = process_doppler(np.asarray(channel.data, dtype=float), fs, DOPPLER_PARAMS)
+        if not result:
+            raise ValueError("insufficient Doppler peaks/troughs")
+        clean = _clean_doppler_metrics(result, fs, args.doppler_quality_threshold)
+        metrics.update({"doppler_mean_peak": float(clean["mean_peak"]),
+                        "doppler_mean_trough": float(clean["mean_trough"]),
+                        "doppler_mean_flow": float(clean["mean_mbp"]),
+                        "doppler_mean_quality": float(clean["mean_quality"]),
+                        "doppler_noisy_percent": float(clean["noisy_percent"]),
+                        "doppler_quality_threshold": float(args.doppler_quality_threshold),
+                        "doppler_n_peaks_clean": int(len(clean["peaks"])),
+                        "doppler_n_troughs_clean": int(len(clean["troughs"])),
+                        "doppler_peaks_clean": clean["peaks"].astype(np.int32),
+                        "doppler_troughs_clean": clean["troughs"].astype(np.int32),
+                        "doppler_noisy_windows": clean["noisy_windows"], "doppler_status": "available"})
+    except Exception as exc:
+        print(f"[WARN] Doppler processing unavailable: {exc}")
+        metrics.update({"doppler_mean_peak": np.nan, "doppler_mean_trough": np.nan,
+                        "doppler_mean_flow": np.nan, "doppler_mean_quality": np.nan,
+                        "doppler_noisy_percent": np.nan, "doppler_quality_threshold": args.doppler_quality_threshold,
+                        "doppler_n_peaks_clean": 0, "doppler_n_troughs_clean": 0,
+                        "doppler_peaks_clean": np.array([], dtype=np.int32),
+                        "doppler_troughs_clean": np.array([], dtype=np.int32),
+                        "doppler_noisy_windows": np.empty((0, 2)), "doppler_status": str(exc)})
+
     print("\n===== REST DERIVED INDICES =====")
-    print(f"BP:  mean_MAP={mean_MAP:.2f}  mean_sysBP={mean_sysBP:.2f}  mean_diaBP={mean_diaBP:.2f}  mean_pulseBP={mean_pulseBP:.2f}")
-    print(f"BP:  n_peaks={len(peaks)}  n_troughs={len(troughs)}  cal_segments={len(idx1)}")
-    print(f"ECG: mean_RR={mean_RR:.4f} s  mean_HR={mean_HR:.2f} bpm  RMSSD={RMSSD_ms:.2f} ms  LF/HF={LF_HF_ratio:.2f}")
-    print(f"ECG: n_rpeaks={len(rpeaks)}")
-
-    # ---- QC Plot
-    if args.plot:
-        plot_qc(
-            sub_id=sub_id, ses_id=ses_id, fs=fs,
-            ecg=ecg, rpeaks=rpeaks,
-            bp_raw=bp_raw, bp_filt=bp_filt,
-            sys_peaks=peaks, dia_troughs=troughs,
-            cal_idx1=idx1, cal_idx2=idx2,
-            max_seconds=args.plot_seconds,
-            outdir=Path(args.plot_outdir),
-        )
-    # ---- Save figures (requested)
-    hr_png = task_out / "resting_hr.png"
-    bp_png = task_out / "resting_BP.png"
-
-     # BP uses t derived from bp_filt
-    # (you already defined t = np.arange(len(bp_filt))/fs earlier)
-    if args.save:
-        save_resting_hr_figure(hr_png, t_ecg, hr_ts)
-        save_resting_bp_figure(bp_png, t, systolic_interp, diastolic_interp, map_interp)
-        print(f"[OK] Saved resting HR figure: {hr_png}")
-        print(f"[OK] Saved resting BP figure: {bp_png}")
+    print(f"ECG: HR={metrics['mean_HR']:.2f} bpm  RMSSD={metrics['RMSSD_ms']:.2f} ms  LF/HF={metrics['LF_HF']:.2f}")
+    print(f"BP:  SBP={metrics['mean_sysBP']:.2f}  DBP={metrics['mean_diaBP']:.2f}  MAP={metrics['mean_MAP']:.2f} mmHg")
+    print(f"RSP: BR={metrics['mean_br']:.2f}/min  ETCO2={metrics['mean_etco2']:.2f} mmHg  "
+          f"TV={metrics['mean_tidal_volume_ml']:.2f} mL  MV={metrics['mean_minute_ventilation']:.2f} L/min")
+    print(f"Doppler: peak={metrics['doppler_mean_peak']:.2f}  trough={metrics['doppler_mean_trough']:.2f}  "
+          f"flow={metrics['doppler_mean_flow']:.2f} cm/s  quality={metrics['doppler_mean_quality']:.3f}  "
+          f"noisy={metrics['doppler_noisy_percent']:.2f}%")
     if args.no_save:
-        print("\n[INFO] --no_save set: not writing any .mat files.")
         return
-
-    # Saving intentionally omitted for now.
     if args.save:
         from scipy.io import savemat
-
-        metrics = {
-            # Scalars (store as float)
-            "mean_MAP": mean_MAP,
-            "mean_sysBP": mean_sysBP,
-            "mean_diaBP": mean_diaBP,
-            "mean_pulseBP": mean_pulseBP,
-            "mean_RR": mean_RR,
-            "mean_HR": mean_HR,
-            "RMSSD_ms": RMSSD_ms,
-            "LF_HF": LF_HF_ratio,
-
-            # Counts
-            "n_peaks": int(len(peaks)),
-            "n_troughs": int(len(troughs)),
-            "n_rpeaks": int(len(rpeaks)),
-            "n_cal_segments": int(len(idx1)),
-
-            # Indices arrays (good for debugging)
-            "bp_peaks": peaks.astype(np.int32),
-            "bp_troughs": troughs.astype(np.int32),
-            "rpeaks": rpeaks.astype(np.int32),
-            "cal_idx1": np.array(idx1, dtype=np.int32),
-            "cal_idx2": np.array(idx2, dtype=np.int32),
-
-            # Metadata
-            "fs": float(fs),
-            "sub_id": sub_id,
-            "ses_id": ses_id,
-            "acq_path": str(acq_path),
-        }
-
+        task_out.mkdir(parents=True, exist_ok=True)
+        save_resting_figures(task_out, fs, ecg_result, bp_result)
+        out_mat = task_out / "rest_metrics.mat"
         savemat(str(out_mat), metrics, do_compression=True)
         print(f"[OK] Saved metrics bundle: {out_mat}")
+
 
 if __name__ == "__main__":
     main()

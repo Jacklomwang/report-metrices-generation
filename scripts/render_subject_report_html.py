@@ -451,16 +451,16 @@ def _render_resting(bundle: dict) -> str:
         + _measure_item("Source", "Continuous ABP", text_value=True)
         + '</div></div>'
         '<div class="card measure-group" style="--group-color:var(--respiratory)"><h3>3. Respiratory measures</h3><div class="measure-list">'
-        + _measure_item("End-tidal CO2", None, "mmHg")
-        + _measure_item("Tidal volume", None, "L")
-        + _measure_item("Minute ventilation", None, "L/min")
-        + _measure_item("Status", "Awaiting data", text_value=True)
+        + _measure_item("End-tidal CO2", whole.get("mean_etco2"), "mmHg")
+        + _measure_item("Breathing rate", whole.get("mean_br"), "breaths/min")
+        + _measure_item("Tidal volume", whole.get("mean_tidal_volume_ml"), "mL")
+        + _measure_item("Minute ventilation", whole.get("mean_minute_ventilation"), "L/min")
         + '</div></div>'
         '<div class="card measure-group" style="--group-color:var(--doppler)"><h3>4. Doppler measures</h3><div class="measure-list">'
-        + _measure_item("Mean flow velocity", None, "cm/s")
-        + _measure_item("Pulsatility index", None)
-        + _measure_item("Laterality", None, text_value=True)
-        + _measure_item("Status", "Awaiting data", text_value=True)
+        + _measure_item("Mean peak velocity", whole.get("doppler_mean_peak"), "cm/s")
+        + _measure_item("Mean trough velocity", whole.get("doppler_mean_trough"), "cm/s")
+        + _measure_item("Mean flow velocity", whole.get("doppler_mean_flow"), "cm/s")
+        + _measure_item("Mean quality", whole.get("doppler_mean_quality"), digits=3)
         + '</div></div>'
         '</div>'
         '<div class="legend"><span style="--legend-color:var(--accent-deep)">ECG / heart rate</span><span style="--legend-color:var(--success)">Blood pressure</span><span style="--legend-color:var(--respiratory)">Respiratory</span><span style="--legend-color:var(--doppler)">Doppler</span></div>'
@@ -472,7 +472,7 @@ def _render_resting(bundle: dict) -> str:
         "Section 03",
         "Resting cardiovascular",
         "04 / Resting state",
-        "Resting measurements are organized by recording modality so that future respiratory and Doppler results can be inserted without changing the page structure.",
+        "Resting measurements are organized by recording modality, with Doppler summaries calculated after noisy-window exclusion.",
         body,
         "LC Study · Resting cardiovascular",
     )
@@ -527,17 +527,35 @@ def _render_sts(bundle: dict) -> str:
 def _render_valsalva(bundle: dict) -> str:
     whole = bundle.get("whole", {})
     figures = bundle.get("figures", {})
-    figure_block = '<div class="figure-grid">'
-    figure_block += _figure_card("Valsalva heart-rate response", "Source-derived figure", figures.get("Valsalva_plot"), "Valsalva heart rate figure")
-    figure_block += '</div>'
+    phase_rows = [
+        ("Baseline", whole.get("valsalva_baseline_sbp"), whole.get("valsalva_baseline_map"), "Mean from -15 to 0 s", False),
+        ("Phase I", whole.get("sbp_phase1_from_baseline"), whole.get("map_phase1_from_baseline"), "Maximum relative to baseline", True),
+        ("Early Phase II", whole.get("sbp_phase2_early_fall"), whole.get("map_phase2_early_fall"), "Nadir relative to Phase I maximum", True),
+        ("Late Phase II", whole.get("sbp_phase2_late_recovery"), whole.get("map_phase2_late_recovery"), "Recovery relative to early Phase II nadir", True),
+        ("Phase III", whole.get("sbp_phase3_drop"), whole.get("map_phase3_drop"), "Nadir relative to late Phase II maximum", True),
+        ("Phase IV", whole.get("sbp_phase4_rise"), whole.get("map_phase4_rise"), "Rise relative to Phase III nadir", True),
+    ]
+    phase_table = '<div class="card"><table><thead><tr><th>BP phase</th><th>SBP value/change</th><th>MAP value/change</th><th>Definition</th></tr></thead><tbody>'
+    for label, sbp_value, map_value, definition, signed in phase_rows:
+        sbp_formatted = _format_number(sbp_value, signed=signed)
+        map_formatted = _format_number(map_value, signed=signed)
+        phase_table += f'<tr><td>{_escape(label)}</td><td>{sbp_formatted} mmHg</td><td>{map_formatted} mmHg</td><td>{_escape(definition)}</td></tr>'
+    phase_table += '</tbody></table></div>'
     body = (
         '<div class="grid grid-3">'
-        + _metric_card("Valsalva ratio", whole.get("Valsalva_ratio"), "", "Reported in source report")
-        + _metric_card("MAP phase II drop", None, "mmHg", "Connect source dataset")
-        + _metric_card("MAP phase IV overshoot", None, "mmHg", "Connect source dataset")
+        + _metric_card("Valsalva ratio", whole.get("Valsalva_ratio"), "", "Calculated from artifact-rejected median HR")
+        + _metric_card("Maximum HR", whole.get("Valsalva_max_HR"), "bpm", "Strain through 5 s after release")
+        + _metric_card("Minimum HR", whole.get("Valsalva_min_HR"), "bpm", "Recovery from release through 45 s")
         + '</div>'
         '<h3 class="section-heading">Synchronized waveforms</h3>'
-        + figure_block
+        + _figure_card(
+            "Heart rate and blood pressure response",
+            "Transparent raw traces with solid artifact-rejected median HR and derived MAP",
+            figures.get("Valsalva_plot"),
+            "Synchronized Valsalva heart rate and blood pressure figure",
+        )
+        + '<h3 class="section-heading">Blood pressure changes by Valsalva phase</h3>'
+        + phase_table
         + _task_note(bundle, "valsalva")
     )
     return _page(

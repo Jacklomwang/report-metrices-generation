@@ -3,4 +3,5 @@ matplotlib>=3.10
 neurokit2>=0.2.12
 numpy>=2.0
 pandas>=2.0
+PyWavelets>=1.8
 scipy>=1.16

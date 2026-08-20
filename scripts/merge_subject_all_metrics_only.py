@@ -295,7 +295,7 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
         d = loadmat(str(p), simplify_cells=True)
         d = {k: v for k, v in d.items() if not k.startswith("__")}
         d = _sanitize_for_matlab(d)
-        d["present"] = 1
+        d.setdefault("present", 1)
         d["metrics_path"] = str(p)
         metrics_by_task[task] = d
 
@@ -311,6 +311,16 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
     whole["mean_HR"] = _first_present(rest, ["mean_HR", "mean_hr"], np.nan)
     whole["RMSSD"] = _first_present(rest, ["RMSSD_ms", "RMSSD", "rmssd_ms"], np.nan)
     whole["LF_HF_ratio"] = _first_present(rest, ["LF_HF", "LF_HF_ratio", "lf_hf", "LF_HF_power"], np.nan)
+    whole["mean_br"] = _first_present(rest, ["mean_br", "breathing_rate_bpm"], np.nan)
+    whole["mean_etco2"] = _first_present(rest, ["mean_etco2", "etco2_mean"], np.nan)
+    whole["mean_tidal_volume_ml"] = _first_present(rest, ["mean_tidal_volume_ml", "mean_tidal_volume"], np.nan)
+    whole["mean_tidal_volume_l"] = _first_present(rest, ["mean_tidal_volume_l"], np.nan)
+    whole["mean_minute_ventilation"] = _first_present(rest, ["mean_minute_ventilation"], np.nan)
+    whole["doppler_mean_peak"] = _first_present(rest, ["doppler_mean_peak", "mean_peak"], np.nan)
+    whole["doppler_mean_trough"] = _first_present(rest, ["doppler_mean_trough", "mean_trough"], np.nan)
+    whole["doppler_mean_flow"] = _first_present(rest, ["doppler_mean_flow", "mean_flow", "mean_mbp"], np.nan)
+    whole["doppler_mean_quality"] = _first_present(rest, ["doppler_mean_quality", "mean_quality"], np.nan)
+    whole["doppler_noisy_percent"] = _first_present(rest, ["doppler_noisy_percent", "noisy_percent"], np.nan)
 
     # STS
     sts = metrics_by_task.get("sts", {})
@@ -340,6 +350,22 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
     # Valsalva
     val = metrics_by_task.get("valsalva", {})
     whole["Valsalva_ratio"] = _first_present(val, ["valsalva_ratio", "Valsalva_ratio", "valsalvaRatio"], np.nan)
+    whole["Valsalva_max_HR"] = _first_present(val, ["best_hr_max", "max_hr_task"], np.nan)
+    whole["Valsalva_min_HR"] = _first_present(val, ["best_hr_min", "min_hr_recovery"], np.nan)
+    whole["valsalva_baseline_sbp"] = _first_present(val, ["baseline_sbp"], np.nan)
+    whole["valsalva_baseline_map"] = _first_present(val, ["baseline_map"], np.nan)
+    whole["sbp_phase1_from_baseline"] = _first_present(val, ["sbp_phase1_from_baseline"], np.nan)
+    whole["sbp_phase2_early_fall"] = _first_present(val, ["sbp_phase2_early_fall"], np.nan)
+    whole["sbp_phase2_late_recovery"] = _first_present(val, ["sbp_phase2_late_recovery"], np.nan)
+    whole["sbp_phase3_drop"] = _first_present(val, ["sbp_phase3_drop"], np.nan)
+    whole["sbp_phase4_rise"] = _first_present(val, ["sbp_phase4_rise"], np.nan)
+    whole["map_phase1_from_baseline"] = _first_present(val, ["map_phase1_from_baseline"], np.nan)
+    whole["map_phase2_early_fall"] = _first_present(val, ["map_phase2_early_fall"], np.nan)
+    whole["map_phase2_late_recovery"] = _first_present(val, ["map_phase2_late_recovery"], np.nan)
+    whole["map_phase3_drop"] = _first_present(val, ["map_phase3_drop"], np.nan)
+    whole["map_phase4_rise"] = _first_present(val, ["map_phase4_rise"], np.nan)
+    whole["map_phase2_drop"] = _first_present(val, ["map_phase2_drop"], np.nan)
+    whole["map_phase4_overshoot"] = _first_present(val, ["map_phase4_overshoot"], np.nan)
 
     # Breathing
     br = metrics_by_task.get("breathing", {})
@@ -361,6 +387,13 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
     spiro_csv = _load_spiro_from_csv(SPIRO_PREDICTED_CSV_PATH, f"sub-{sub}", ses)
 
     if spiro_csv:
+        sp.update(spiro_csv)
+        sp["present"] = 1
+        sp["metrics_source"] = str(SPIRO_PREDICTED_CSV_PATH)
+        if not np.isfinite(_first_present(sp, ["PEF_max", "PEF"], np.nan)):
+            sp["note"] = "FEV1 and FVC loaded from FVC_results.csv; PEF is unavailable."
+        elif str(sp.get("note", "")).startswith("Spirometry unavailable"):
+            sp.pop("note", None)
         for key in _SPIRO_CSV_COLUMNS:
             whole[key] = spiro_csv.get(key, np.nan)
     else:
@@ -387,6 +420,7 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
             base / "sts" / "STS_HR_MAP.jpg",
         ),
         "Valsalva_plot": _first_existing(
+            base / "valsalva" / "valsalva_best_rep_hr_bp.png",
             base / "valsalva" / "valsalva_best_rep_hr.png",
             base / "valsalva" / "valsalva_best_rep_hr.jpg",
             base / "valsalva" / "valsalva_best_rep_hr.tif",
@@ -394,6 +428,7 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
         "Valsalva_debug_plot": _first_existing(base / "valsalva" / "valsalva_debug_full_hr.png"),
         "DeepBreathing_plot": _first_existing(
             base / "breathing" / "deep_breathing_HR_plot.png",
+            base / "breathing" / "breathing_hr_7to8min.png",
             base / "breathing" / "breathing_hr_8to9min.png",
             base / "breathing" / "breathing_hr_window.png",
             base / "breathing" / "breathing_hr_plot.png",

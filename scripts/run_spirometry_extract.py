@@ -113,6 +113,36 @@ def nanmax_or_nan(x: np.ndarray) -> float:
     return float(np.nanmax(x)) if np.isfinite(x).any() else float("nan")
 
 
+def save_missing_spirometry_metrics(
+    out_root: Path,
+    sub_id: str,
+    ses_id: str,
+    source_csv: Path,
+    reason: str,
+) -> Path:
+    """Write an explicit unavailable result so stale values are never reused."""
+    task_out = out_root / sub_id / ses_id / "spirometry"
+    task_out.mkdir(parents=True, exist_ok=True)
+    out_mat = task_out / "spirometry_metrics.mat"
+    metrics = {
+        "sub_id": sub_id,
+        "ses_id": ses_id,
+        "source_csv": str(source_csv),
+        "n_rows_found": 0,
+        "FEV1_max": np.nan,
+        "FVC_max": np.nan,
+        "PEF_max": np.nan,
+        "FEV1_over_FVC_max": np.nan,
+        "FVC_over_FEV1_max": np.nan,
+        "present": 0,
+        "note": reason,
+    }
+    savemat(str(out_mat), metrics, do_compression=True)
+    print(f"[WARN] {reason}")
+    print(f"[OK] Saved unavailable spirometry result: {out_mat}")
+    return out_mat
+
+
 def main():
     ap = argparse.ArgumentParser(description="Extract spirometry metrics for a subject and save to derived/.")
     ap.add_argument("--spiro_dir", default=SPIRO_DIR_DEFAULT, help="Spirometry folder (default LCS/03_spirometry)")
@@ -136,7 +166,14 @@ def main():
 
     sub_rows = find_subject_rows(df, sub_id, id_col=args.id_col)
     if sub_rows.empty:
-        raise RuntimeError(f"No rows found for subject {sub_id} in {csv_path.name}")
+        save_missing_spirometry_metrics(
+            out_root,
+            sub_id,
+            ses_id,
+            csv_path,
+            f"Spirometry unavailable: no rows found for {sub_id} in {csv_path.name}",
+        )
+        return
 
     print(f"[INFO] Found {len(sub_rows)} spirometry row(s) for {sub_id}")
 
@@ -208,6 +245,7 @@ def main():
         "PEF_max": float(pef_max),
         "FEV1_over_FVC_max": float(fev1_over_fvc_max),
         "FVC_over_FEV1_max": float(fvc_over_fev1_max),
+        "present": 1,
     }
 
     savemat(str(out_mat), metrics, do_compression=True)

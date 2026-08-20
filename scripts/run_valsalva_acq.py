@@ -8,6 +8,34 @@ import numpy as np
 import bioread
 import neurokit2 as nk
 
+if not hasattr(np, "trapz") and hasattr(np, "trapezoid"):
+    np.trapz = np.trapezoid
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.physio_qc.metrics.blood_pressure import process_bp
+from src.valsalva_bp import (
+    bp_phase_landmarks,
+    phase_summary_metrics,
+    prepare_hr_traces,
+    save_valsalva_hr_bp_figure,
+    valsalva_hr_metrics,
+)
+
+
+BP_PARAMS = {
+    "filter_method": "bessel_25hz",
+    "filter_order": 3,
+    "cutoff_freq": 25,
+    "peak_method": "delineator",
+    "prominence": 10,
+    "detect_calibration": True,
+    "calibration_threshold": 0.1,
+    "calibration_min_duration": 1.0,
+    "calibration_padding": 0.4,
+}
+
 
 # ----------------------------
 # Path / file finding
@@ -126,6 +154,16 @@ def pick_channel_by_index(channels, ch_num: int, one_based: bool):
     return channels[idx], idx
 
 
+def autodetect_bp_channel(channels):
+    """Prefer the continuous A10 waveform and avoid the NIBP rate channel."""
+    patterns = ("a10", "a 10", "arterial_pressure", "blood_pressure", "abp")
+    for index, channel in enumerate(channels):
+        name = str(getattr(channel, "name", "") or "").lower()
+        if any(pattern in name for pattern in patterns) and "rate" not in name:
+            return channel, index
+    return None, None
+
+
 # ----------------------------
 # Trigger extraction
 # ----------------------------
@@ -174,6 +212,18 @@ def extract_valsalva_starts_from_trigger(trig: np.ndarray, fs: float) -> np.ndar
 
     return np.array(starts[:3], dtype=int)
 
+
+def extract_valsalva_starts_from_event_markers(event_markers) -> np.ndarray:
+    """Return sample indices for Biopac `defl` markers in recording order."""
+    starts = []
+    for marker in event_markers:
+        if str(getattr(marker, "type_code", "")).lower() != "defl":
+            continue
+        sample_index = getattr(marker, "sample_index", None)
+        if sample_index is not None:
+            starts.append(int(sample_index))
+    return np.asarray(sorted(set(starts)), dtype=int)
+
 def save_signal_peaks_debug_plot(out_png: Path, sig: np.ndarray, peaks: np.ndarray, fs: float, title: str):
     import os, matplotlib
     if not os.environ.get("DISPLAY"):
@@ -204,10 +254,10 @@ def save_signal_peaks_debug_plot(out_png: Path, sig: np.ndarray, peaks: np.ndarr
 
 def autodetect_trigger_channel(acq, fs: float, trig_patterns: list[str]) -> np.ndarray | None:
     """
-    Try:
-      1) name-based match
-      2) content-based: a channel that yields >=3 starts
-    Returns trigger array or None.
+    Find a trigger channel by name only.
+
+    Physiological channels are deliberately not scanned by content because
+    rounded SpO2 and other waveforms can resemble discrete trigger labels.
     """
     pats = [p.lower() for p in trig_patterns]
 
@@ -216,13 +266,6 @@ def autodetect_trigger_channel(acq, fs: float, trig_patterns: list[str]) -> np.n
         nm = (getattr(ch, "name", "") or "").lower()
         if any(p in nm for p in pats):
             return np.asarray(ch.data, dtype=float)
-
-    # content-based
-    for ch in acq.channels:
-        cand = np.asarray(ch.data, dtype=float)
-        starts = extract_valsalva_starts_from_trigger(cand, fs)
-        if starts.size >= 3:
-            return cand
 
     return None
 
@@ -348,7 +391,7 @@ def save_valsalva_hr_figure(
     ax.legend(loc="best", fontsize=12, frameon=False)
 
 
-    ax.grid(False, alpha=0.3)
+    ax.grid(False)
     ax.legend(loc="best")
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
@@ -361,7 +404,7 @@ def save_valsalva_hr_figure(
 # Main
 # ----------------------------
 def main():
-    ap = argparse.ArgumentParser(description="Valsalva: compute HR-only Valsalva ratio + figure")
+    ap = argparse.ArgumentParser(description="Valsalva: compute HR ratio and BP phases for the best repetition")
 
     ap.add_argument("--root", default="/export02/projects/LCS/01_physio", help="Root folder containing sub-*")
     ap.add_argument("--sub", required=True, help="Subject code like 2062")
@@ -369,6 +412,7 @@ def main():
 
     ap.add_argument("--one_based", action="store_true", help="Interpret channel numbers as 1-based")
     ap.add_argument("--ecg_ch", type=int, default=4, help="ECG channel number (default 4)")
+    ap.add_argument("--bp_ch", type=int, default=10, help="Fallback BP channel number when A10 detection fails")
     ap.add_argument("--ecg_method", default="neurokit", help="NeuroKit ECG processing method")
     ap.add_argument("--trig_ch", type=int, default=None, help="Trigger channel number (optional; auto-detect if omitted)")
     ap.add_argument("--trig_patterns", nargs="+", default=["trigger", "trig", "marker", "event", "sync"],
@@ -377,8 +421,7 @@ def main():
     ap.add_argument("--save", action="store_true", help="Save metrics (.mat) and best repetition figure (.png)")
     ap.add_argument("--out_root", default="derived", help="Root output folder under this project")
 
-    ap.add_argument("--hr_smooth_sec", type=float, default=0.0,
-                    help="Smoothing window (sec) for HR used in max/min (default 1.0). Set 0 for none.")
+    ap.add_argument("--hr_smooth_sec", type=float, default=0.0, help=argparse.SUPPRESS)
     ap.add_argument("--plot", action="store_true", help="Also try to show the figure (requires DISPLAY)")
     ap.add_argument("--debug_plot", action="store_true",
                 help="Save debug plot: full HR (no smoothing) + triggers + max/min for each rep")
@@ -415,19 +458,43 @@ def main():
     ecg = np.asarray(ecg_ch.data, dtype=float)
     print(f"[INFO] ECG channel index={ecg_idx} name={getattr(ecg_ch,'name','')}")
 
-    # Trigger channel
+    bp_raw = None
+    bp_result = None
+    bp_idx = -1
+    try:
+        bp_ch, bp_idx = autodetect_bp_channel(acq.channels)
+        if bp_ch is None:
+            bp_ch, bp_idx = pick_channel_by_index(acq.channels, args.bp_ch, args.one_based)
+        bp_raw = np.asarray(bp_ch.data, dtype=float)
+        print(f"[INFO] BP channel index={bp_idx} name={getattr(bp_ch,'name','')}")
+        bp_result = process_bp(bp_raw, fs, BP_PARAMS)
+        if not bp_result:
+            raise ValueError("insufficient BP peaks/troughs")
+    except Exception as exc:
+        print(f"[WARN] Valsalva BP processing unavailable: {exc}")
+        bp_raw = None
+        bp_result = None
+
+    # Explicit channel overrides markers; otherwise prefer Biopac defl markers.
     if args.trig_ch is not None:
         trig_ch, trig_idx = pick_channel_by_index(acq.channels, args.trig_ch, args.one_based)
         trig = np.asarray(trig_ch.data, dtype=float)
         print(f"[INFO] Trigger channel index={trig_idx} name={getattr(trig_ch,'name','')}")
+        starts = extract_valsalva_starts_from_trigger(trig, fs)
     else:
-        trig = autodetect_trigger_channel(acq, fs, args.trig_patterns)
-        if trig is None:
-            raise RuntimeError("Could not auto-detect trigger channel. Provide --trig_ch <N>.")
-        print("[INFO] Trigger channel auto-detected.")
+        starts = extract_valsalva_starts_from_event_markers(acq.event_markers)
+        if starts.size:
+            print(f"[INFO] Using {starts.size} Biopac defl event marker(s) as Valsalva starts.")
+        else:
+            trig = autodetect_trigger_channel(acq, fs, args.trig_patterns)
+            if trig is None:
+                raise RuntimeError(
+                    "No Biopac defl markers or named trigger channel found. Provide --trig_ch <N>."
+                )
+            starts = extract_valsalva_starts_from_trigger(trig, fs)
+            print("[INFO] Named trigger channel auto-detected (defl markers unavailable).")
 
-    # Extract repetition starts (3 expected)
-    starts = extract_valsalva_starts_from_trigger(trig, fs)
+    # Sort and keep the expected three repetition starts.
     # Sort + drop starts that occur too early (e.g., < 10s)
     starts = np.sort(starts)
     starts = starts[starts >= int(10.0 * fs)]
@@ -526,11 +593,8 @@ def main():
         rep_max_v[i] = float(hw[i_max])
         rep_min_v[i] = float(hw[i_min])
 
-    # Optional smoothing to stabilize max/min
-    if args.hr_smooth_sec and args.hr_smooth_sec > 0:
-        hr_use = moving_average_seconds(hr_ts, fs, win_sec=args.hr_smooth_sec, pad_mode="edge")
-    else:
-        hr_use = hr_ts
+    # Match the group analysis: 4 Hz HR with a 5-sample (1.25 s) median filter.
+    hr_time_4hz, hr_raw_4hz, hr_filtered_4hz = prepare_hr_traces(hr_ts, fs)
 
     # Compute ratios for each repetition
     ratios = []
@@ -539,22 +603,10 @@ def main():
 
     for i, s_idx in enumerate(starts):
         s_t = s_idx / fs
-        w = (t >= s_t) & (t < s_t + 70.0)  # 70s post-start
-        hr_w = hr_use[w]
-
-        if hr_w.size == 0 or not np.isfinite(hr_w).any():
-            ratios.append(np.nan)
-            rep_hr_max.append(np.nan)
-            rep_hr_min.append(np.nan)
-            continue
-
-        hr_max = float(np.nanmax(hr_w))
-        hr_min = float(np.nanmin(hr_w))
-        ratio = (hr_max / hr_min) if (np.isfinite(hr_max) and np.isfinite(hr_min) and hr_min > 0) else np.nan
-
-        ratios.append(ratio)
-        rep_hr_max.append(hr_max)
-        rep_hr_min.append(hr_min)
+        hr_metrics = valsalva_hr_metrics(hr_time_4hz, hr_filtered_4hz, s_t)
+        ratios.append(hr_metrics["valsalva_ratio"])
+        rep_hr_max.append(hr_metrics["max_hr_task"])
+        rep_hr_min.append(hr_metrics["min_hr_recovery"])
 
     ratios = np.array(ratios, dtype=float)
     rep_hr_max = np.array(rep_hr_max, dtype=float)
@@ -573,7 +625,7 @@ def main():
     print(f"[RESULT] Valsalva ratio (max over reps) = {valsalva_ratio:.3f}  | best rep = {best_rep+1 if best_rep>=0 else 'NA'}")
 
 
-    fig_path = task_out / "valsalva_best_rep_hr.png"
+    fig_path = task_out / "valsalva_best_rep_hr_bp.png"
     mat_path = task_out / "valsalva_metrics.mat"
     debug_fig_path = task_out / "valsalva_debug_full_hr.png"
 
@@ -596,40 +648,42 @@ def main():
     hr_max = np.nan
     hr_min = np.nan
     best_start_t = np.nan
+    bp_landmarks = {}
+    bp_summary = phase_summary_metrics({})
 
     if best_rep >= 0:
         best_start_t = starts[best_rep] / fs
-        w70 = (t >= best_start_t) & (t < best_start_t + 70.0)
-        tw = t[w70]
-        hw = hr_use[w70]
+        selected_hr = valsalva_hr_metrics(hr_time_4hz, hr_filtered_4hz, best_start_t)
+        hr_max = selected_hr["max_hr_task"]
+        hr_min = selected_hr["min_hr_recovery"]
+        hr_max_t = best_start_t + selected_hr["max_hr_time"]
+        hr_min_t = best_start_t + selected_hr["min_hr_time"]
 
-        # indices of max/min within post-start 70s
-        i_max = int(np.nanargmax(hw))
-        i_min = int(np.nanargmin(hw))
-
-        hr_max_t = float(tw[i_max])
-        hr_min_t = float(tw[i_min])
-        hr_max = float(hw[i_max])
-        hr_min = float(hw[i_min])
-
-        # Save figure if requested
-        if args.save:
-            save_valsalva_hr_figure(fig_path, t, hr_use, best_start_t, hr_max_t, hr_min_t, hr_max, hr_min)
-            print(f"[OK] Saved Valsalva HR figure: {fig_path}")
-
-            # If user also wants to view interactively
-            if args.plot:
-                import os
-                if os.environ.get("DISPLAY"):
-                    import matplotlib.pyplot as plt
-                    import matplotlib.image as mpimg
-                    img = mpimg.imread(fig_path)
-                    plt.figure(figsize=(10, 4))
-                    plt.imshow(img)
-                    plt.axis("off")
-                    plt.show()
-                else:
-                    print("[INFO] --plot requested but no DISPLAY available.")
+        if bp_result is not None and bp_raw is not None:
+            bp_landmarks = bp_phase_landmarks(bp_result, best_start_t)
+            bp_summary = phase_summary_metrics(bp_landmarks)
+            if bp_landmarks:
+                events = bp_landmarks["events"]
+                print(
+                    "[RESULT] Valsalva BP phases: "
+                    f"Phase II drop={bp_summary['map_phase2_drop']:.2f} mmHg  "
+                    f"Phase IV overshoot={bp_summary['map_phase4_overshoot']:.2f} mmHg"
+                )
+            else:
+                print("[WARN] Automatic Valsalva BP phase landmarks could not be resolved.")
+            if args.save:
+                save_valsalva_hr_bp_figure(
+                    fig_path,
+                    hr_time_4hz,
+                    hr_raw_4hz,
+                    hr_filtered_4hz,
+                    bp_raw,
+                    bp_result,
+                    fs,
+                    best_start_t,
+                    bp_landmarks,
+                )
+                print(f"[OK] Saved synchronized Valsalva HR/BP figure: {fig_path}")
     else:
         print("[WARN] No valid repetition ratio found; skipping figure generation.")
 
@@ -651,12 +705,33 @@ def main():
         "best_hr_min": float(hr_min) if np.isfinite(hr_min) else np.nan,
         "best_hr_max_t_s": float(hr_max_t) if np.isfinite(hr_max_t) else np.nan,
         "best_hr_min_t_s": float(hr_min_t) if np.isfinite(hr_min_t) else np.nan,
+        "map_phase2_drop": float(bp_summary["map_phase2_drop"]),
+        "map_phase4_overshoot": float(bp_summary["map_phase4_overshoot"]),
+        "baseline_sbp": float(bp_summary["baseline_sbp"]),
+        "baseline_map": float(bp_summary["baseline_map"]),
+        "sbp_phase1_from_baseline": float(bp_summary["sbp_phase1_from_baseline"]),
+        "sbp_phase2_early_fall": float(bp_summary["sbp_phase2_early_fall"]),
+        "sbp_phase2_late_recovery": float(bp_summary["sbp_phase2_late_recovery"]),
+        "sbp_phase3_drop": float(bp_summary["sbp_phase3_drop"]),
+        "sbp_phase4_rise": float(bp_summary["sbp_phase4_rise"]),
+        "map_phase1_from_baseline": float(bp_summary["map_phase1_from_baseline"]),
+        "map_phase2_early_fall": float(bp_summary["map_phase2_early_fall"]),
+        "map_phase2_late_recovery": float(bp_summary["map_phase2_late_recovery"]),
+        "map_phase3_drop": float(bp_summary["map_phase3_drop"]),
+        "map_phase4_rise": float(bp_summary["map_phase4_rise"]),
+        "bp_phase1_time_s": float(bp_landmarks.get("events", {}).get("phase1_max", {}).get("time", np.nan)),
+        "bp_phase2_nadir_time_s": float(bp_landmarks.get("events", {}).get("phase2_nadir", {}).get("time", np.nan)),
+        "bp_phase2_late_time_s": float(bp_landmarks.get("events", {}).get("phase2_late_max", {}).get("time", np.nan)),
+        "bp_phase3_time_s": float(bp_landmarks.get("events", {}).get("phase3_nadir", {}).get("time", np.nan)),
+        "bp_phase4_time_s": float(bp_landmarks.get("events", {}).get("phase4_max", {}).get("time", np.nan)),
         "fs": float(fs),
         "sub_id": sub_id,
         "ses_id": ses_id,
         "acq_path": str(acq_path),
         "figure_path": str(fig_path) if best_rep >= 0 else "",
+        "bp_figure_path": str(fig_path) if bp_result is not None and best_rep >= 0 else "",
         "ecg_channel_index": int(ecg_idx),
+        "bp_channel_index": int(bp_idx),
     }
 
     savemat(str(mat_path), metrics, do_compression=True)

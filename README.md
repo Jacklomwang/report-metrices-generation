@@ -11,10 +11,10 @@ Current status:
 ## What the project does
 
 For one subject/session, the pipeline can generate:
-- `rest`: resting HR/HRV and BP summary metrics plus figures
+- `rest`: resting ECG/HRV, BP, respiratory, ETCO2, and Doppler metrics plus ECG/BP QC figures
 - `sts`: supine-to-stand metrics plus figure
-- `valsalva`: Valsalva ratio plus figure
-- `breathing`: deep-breathing metrics plus figure
+- `valsalva`: Valsalva ratio from artifact-rejected median HR, synchronized HR/BP figure, and SBP/MAP phase summaries
+- `breathing`: deep-breathing metrics and a minute 7-8 HR figure
 - `spirometry`: FEV1 / FVC / PEF extracted metrics
 
 Then it can:
@@ -26,7 +26,7 @@ Then it can:
 Main source folders:
 - `scripts/`: task runners, merge script, and final HTML renderer
 - `html_report/`: active HTML report template
-- `src/`: shared processing helpers, including the local metadata loader used by the report renderer
+- `src/`: shared processing helpers, the local metadata loader, and the vendored Physio-QC resting processors
 
 Generated/local-only folders:
 - `derived/`: generated per-subject outputs
@@ -86,15 +86,14 @@ If you already have a working environment from `physio-qc`, you can also use tha
 
 ## Main workflow
 
-The current workflow is three steps.
-
-### 1. Run per-task processing for one subject/session
+Run the complete pipeline for one subject/session with one command:
 
 ```bash
 python scripts/run_subject_all.py \
   --root /export02/projects/LCS/01_physio \
   --sub 2062 \
   --ses 1 \
+  --one_based \
   --out_root derived
 ```
 
@@ -109,11 +108,15 @@ derived/sub-2062/ses-1/
   spirometry/
 ```
 
-Important:
-- `run_subject_all.py` currently stops after task execution plus a combined `.mat` bundle
-- it does **not** by itself produce the merged JSON or final HTML report
+It then creates the merged MAT and JSON bundles and renders:
 
-### 2. Build the merged MAT + JSON bundle
+```text
+derived/sub-2062/ses-1/sub-2062_ses-1_report.html
+```
+
+## Re-merge or re-render only
+
+If task outputs already exist, rebuild the MAT and JSON bundle without repeating physiological processing:
 
 ```bash
 python scripts/merge_subject_all_metrics_only.py \
@@ -136,7 +139,7 @@ The merged bundle contains:
 - `sub_id`
 - `ses_id`
 
-### 3. Render the final HTML report
+Render the HTML again from an existing merged JSON bundle:
 
 ```bash
 python scripts/render_subject_report_html.py \
@@ -170,12 +173,14 @@ python scripts/run_rest_acq.py \
   --root /export02/projects/LCS/01_physio \
   --sub 2062 \
   --ses 1 \
-  --one_based \
-  --ecg_ch 6 \
-  --bp_ch 10 \
   --save \
   --out_root derived
 ```
+
+The resting runner auto-detects ECG, continuous blood pressure, respiratory
+belt, pneumotach, CO2, and Doppler channels by name. `--ecg_ch` and `--bp_ch`
+remain available only as backward-compatible fallbacks when channel names are
+unusual.
 
 ## Opening the HTML report
 
@@ -194,12 +199,39 @@ http://<server-name>:8000/sub-2062_ses-1_report.html
 
 ## Channel notes
 
-The task scripts use explicit channel arguments for ECG / BP / PPG where needed.
+The resting script uses Physio-QC-compatible name detection and does not require
+channel numbers for normal LCS recordings. Its detected channel names are saved
+in `rest_metrics.mat` for traceability.
 
-Many runs depend on correct channel numbers. If defaults are wrong for a subject, override them when calling the script.
+STS, Valsalva, and breathing still use explicit ECG / BP / PPG channel numbers.
+If their defaults are wrong for a subject, override them when calling the script.
 
 `--one_based` means:
 - channel 1 = first channel in the `.acq` file
+
+Use `--one_based` with `run_subject_all.py` for the current LCS channel defaults.
+
+## Resting processing
+
+The report repository contains a focused copy of the required Physio-QC
+processors under `src/physio_qc/`, so it does not require a neighboring
+`physio-qc` checkout. The resting pipeline uses:
+
+- NeuroKit cleaning and fixed NeuroKit R-peak detection for ECG/HRV
+- the Physio-QC BP filter, delineator, and calibration-artifact exclusion
+- Physio-QC respiratory-belt and BreathMetrics pneumotach processing
+- the Physio-QC ETCO2 envelope extractor after A8 voltage conversion
+- the Physio-QC Doppler wavelet filter, delineator, and beat-quality score
+
+Valsalva repetition starts are read from Biopac `defl` event markers. An
+explicit `--trig_ch` remains available as an override; automatic fallback only
+uses channels whose names contain trigger/event/sync patterns and never scans
+SpO2 or other physiological waveforms for trigger-like values.
+
+Doppler noise is classified in 10-second windows stepped every 5 seconds. A
+window is excluded when its time-weighted mean beat quality is below `0.8`.
+The Doppler summary values are calculated only from retained peaks/troughs and
+the excluded percentage is stored as `doppler_noisy_percent`.
 
 ## Troubleshooting
 

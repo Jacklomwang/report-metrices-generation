@@ -214,7 +214,7 @@ def save_breathing_hr_window_plot(
 # ----------------------------
 def main():
     ap = argparse.ArgumentParser(
-        description="Breathing task: HR max/min (top 5) in 8–9 min window (fallback to 3–4 min if too short) + plot + metrics"
+        description="Breathing task: HR max/min (top 5) in 7-8 min window (fallback to 3-4 min if too short) + plot + metrics"
     )
 
     ap.add_argument("--root", default="/export02/projects/LCS/01_physio", help="Root folder containing sub-*")
@@ -228,8 +228,8 @@ def main():
     ap.add_argument("--force_ppg", action="store_true", help="Always use PPG for HR (ignore ECG)")
     ap.add_argument("--fallback_ppg", action="store_true", help="If ECG HR looks bad, fall back to PPG")
 
-    ap.add_argument("--win_start_min", type=float, default=8.0, help="Primary window start (minutes), default 8")
-    ap.add_argument("--win_end_min", type=float, default=9.0, help="Primary window end (minutes), default 9")
+    ap.add_argument("--win_start_min", type=float, default=7.0, help="Primary window start (minutes), default 7")
+    ap.add_argument("--win_end_min", type=float, default=8.0, help="Primary window end (minutes), default 8")
     ap.add_argument("--top_k", type=int, default=5, help="Number of max/min points to use (default 5)")
 
     ap.add_argument(
@@ -317,18 +317,18 @@ def main():
 
     # ----------------------------
     # Window selection rule:
-    #   - primary: 8–9 min (480–540s)
-    #   - if duration < 540s: use 3–4 min (180–240s)
+    #   - primary: 7-8 min (420-480s)
+    #   - if the recording is shorter: use 3-4 min (180-240s)
     #   - safety: if even shorter than 240s: use last 60s
     # ----------------------------
     win_start = float(args.win_start_min) * 60.0
     win_end = float(args.win_end_min) * 60.0
     win_label = f"{args.win_start_min:.0f}–{args.win_end_min:.0f} min"
 
-    if duration_s < 540.0:
+    if duration_s < win_end:
         win_start, win_end = 180.0, 240.0
         win_label = "3–4 min (fallback)"
-        print(f"[WARN] Breathing duration={duration_s:.1f}s < 540s. Using fallback window 180–240s (3–4 min).")
+        print(f"[WARN] Breathing recording is shorter than the requested window. Using fallback 180-240s (3-4 min).")
 
     if duration_s < win_end:
         # extreme fallback

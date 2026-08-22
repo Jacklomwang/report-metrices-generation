@@ -23,6 +23,7 @@ from src.physio_qc.metrics.etco2 import process_etco2
 from src.physio_qc.metrics.rsp import process_rsp
 from src.physio_qc.metrics.spirometry import process_breathmetrics
 from src.physio_qc.utils.conversions import convert_voltage_to_mmhg_co2
+from src.rest_ecg import calculate_resting_ecg_morphology, save_average_ecg_figure
 
 
 ECG_PARAMS = {
@@ -177,7 +178,7 @@ def _clean_doppler_metrics(result, sampling_rate, quality_threshold):
     return metrics
 
 
-def save_resting_figures(task_out: Path, fs: float, ecg_result, bp_result):
+def save_resting_figures(task_out: Path, fs: float, ecg_result, bp_result, ecg_morphology=None):
     import matplotlib
     if not os.environ.get("DISPLAY"):
         matplotlib.use("Agg")
@@ -203,6 +204,8 @@ def save_resting_figures(task_out: Path, fs: float, ecg_result, bp_result):
         fig.tight_layout()
         fig.savefig(task_out / "resting_BP.png", dpi=200, bbox_inches="tight")
         plt.close(fig)
+    if ecg_morphology:
+        save_average_ecg_figure(task_out / "resting_ecg_average.png", ecg_morphology)
 
 
 def main():
@@ -240,7 +243,7 @@ def main():
                "processing_source": "vendored_physio_qc_d56fa44"}
     for modality, (channel, _) in detected.items():
         metrics[f"channel_{modality}"] = _name(channel) if channel is not None else ""
-    ecg_result = bp_result = None
+    ecg_result = bp_result = ecg_morphology = None
 
     channel = detected["ecg"][0]
     try:
@@ -264,6 +267,28 @@ def main():
         print(f"[WARN] ECG processing unavailable: {exc}")
         metrics.update({"mean_RR": np.nan, "mean_HR": np.nan, "RMSSD_ms": np.nan, "LF_HF": np.nan,
                         "n_rpeaks": 0, "rpeaks": np.array([], dtype=np.int32), "ecg_status": str(exc)})
+
+    morphology_defaults = {
+        "ecg_p_duration_ms": np.nan,
+        "ecg_qrs_duration_ms": np.nan,
+        "ecg_pq_time_ms": np.nan,
+        "ecg_qt_time_ms": np.nan,
+        "ecg_interval_n_beats": 0,
+        "ecg_average_n_beats": 0,
+    }
+    try:
+        if not ecg_result:
+            raise ValueError("processed ECG unavailable")
+        ecg_morphology = calculate_resting_ecg_morphology(
+            ecg_result["clean"], ecg_result["current_r_peaks"], fs
+        )
+        metrics.update({key: ecg_morphology[key] for key in morphology_defaults if key in ecg_morphology})
+        metrics["ecg_average_n_beats"] = int(ecg_morphology["average"]["n_beats"])
+        metrics["ecg_delineation_status"] = "available"
+    except Exception as exc:
+        print(f"[WARN] ECG morphology unavailable: {exc}")
+        metrics.update(morphology_defaults)
+        metrics["ecg_delineation_status"] = str(exc)
 
     channel = detected["bp"][0]
     try:
@@ -363,6 +388,9 @@ def main():
 
     print("\n===== REST DERIVED INDICES =====")
     print(f"ECG: HR={metrics['mean_HR']:.2f} bpm  RMSSD={metrics['RMSSD_ms']:.2f} ms  LF/HF={metrics['LF_HF']:.2f}")
+    print(f"ECG morphology: P={metrics['ecg_p_duration_ms']:.1f} ms  "
+          f"QRS={metrics['ecg_qrs_duration_ms']:.1f} ms  PQ={metrics['ecg_pq_time_ms']:.1f} ms  "
+          f"QT={metrics['ecg_qt_time_ms']:.1f} ms")
     print(f"BP:  SBP={metrics['mean_sysBP']:.2f}  DBP={metrics['mean_diaBP']:.2f}  MAP={metrics['mean_MAP']:.2f} mmHg")
     print(f"RSP: BR={metrics['mean_br']:.2f}/min  ETCO2={metrics['mean_etco2']:.2f} mmHg  "
           f"TV={metrics['mean_tidal_volume_ml']:.2f} mL  MV={metrics['mean_minute_ventilation']:.2f} L/min")
@@ -374,7 +402,7 @@ def main():
     if args.save:
         from scipy.io import savemat
         task_out.mkdir(parents=True, exist_ok=True)
-        save_resting_figures(task_out, fs, ecg_result, bp_result)
+        save_resting_figures(task_out, fs, ecg_result, bp_result, ecg_morphology)
         out_mat = task_out / "rest_metrics.mat"
         savemat(str(out_mat), metrics, do_compression=True)
         print(f"[OK] Saved metrics bundle: {out_mat}")

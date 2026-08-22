@@ -209,6 +209,10 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
     whole["mean_HR"] = rest.get("mean_HR", np.nan)
     whole["RMSSD"] = rest.get("RMSSD_ms", np.nan)  # already ms in your printouts
     whole["LF_HF_ratio"] = rest.get("LF_HF", np.nan)
+    whole["ecg_p_duration_ms"] = rest.get("ecg_p_duration_ms", np.nan)
+    whole["ecg_qrs_duration_ms"] = rest.get("ecg_qrs_duration_ms", np.nan)
+    whole["ecg_pq_time_ms"] = rest.get("ecg_pq_time_ms", np.nan)
+    whole["ecg_qt_time_ms"] = rest.get("ecg_qt_time_ms", np.nan)
     whole["mean_br"] = rest.get("mean_br", np.nan)
     whole["mean_etco2"] = rest.get("mean_etco2", np.nan)
     whole["mean_tidal_volume_ml"] = rest.get("mean_tidal_volume_ml", np.nan)
@@ -272,6 +276,7 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
     # Paths to figures you insert in compile_whole
     # (keep these here so MATLAB can just read them)
     figs = {
+        "REST_ECG_AVERAGE": str(base / "rest" / "resting_ecg_average.png"),
         "STS_HR_MAP": str(base / "sts" / "STS_HR_MAP_plot.png"),  # if your STS script writes there
         "Valsalva_plot": str(base / "valsalva" / "valsalva_best_rep_hr_bp.png"),
         "DeepBreathing_plot": str(base / "breathing" / "deep_breathing_HR_plot.png"),
@@ -319,6 +324,10 @@ def main():
 
     ap.add_argument("--sts_ecg_ch", type=int, default=4, help="STS ECG channel (default 4)")
     ap.add_argument("--sts_bp_ch", type=int, default=10, help="STS BP channel (default 10)")
+    ap.add_argument(
+        "--sts_doppler_quality_threshold", type=float, default=0.8,
+        help="Minimum Doppler quality in both STS conditions (default 0.8)",
+    )
 
     ap.add_argument("--val_ecg_ch", type=int, default=4, help="Valsalva ECG channel (default 4)")
     ap.add_argument("--val_bp_ch", type=int, default=10, help="Valsalva BP fallback channel (default 10)")
@@ -359,6 +368,7 @@ def main():
             "--save", "--out_root", args.out_root,
             "--ecg_ch", str(args.sts_ecg_ch),
             "--bp_ch", str(args.sts_bp_ch),
+            "--doppler_quality_threshold", str(args.sts_doppler_quality_threshold),
         ]
         run(cmd)
     else:

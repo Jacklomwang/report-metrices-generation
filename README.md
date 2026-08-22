@@ -11,8 +11,8 @@ Current status:
 ## What the project does
 
 For one subject/session, the pipeline can generate:
-- `rest`: resting ECG/HRV, BP, respiratory, ETCO2, and Doppler metrics plus ECG/BP QC figures
-- `sts`: supine-to-stand metrics plus figure
+- `rest`: resting ECG/HRV and morphology, BP, respiratory, ETCO2, and Doppler metrics plus QC figures
+- `sts`: supine-to-stand heart-rate and blood-pressure metrics, onset marker, and an optional mean Doppler velocity panel that requires mean beat quality >= 0.8 in both supine and standing periods
 - `valsalva`: Valsalva ratio from artifact-rejected median HR, synchronized HR/BP figure, and SBP/MAP phase summaries
 - `breathing`: deep-breathing metrics and a minute 7-8 HR figure
 - `spirometry`: FEV1 / FVC / PEF extracted metrics
@@ -218,6 +218,7 @@ processors under `src/physio_qc/`, so it does not require a neighboring
 `physio-qc` checkout. The resting pipeline uses:
 
 - NeuroKit cleaning and fixed NeuroKit R-peak detection for ECG/HRV
+- NeuroKit DWT delineation for the average ECG waveform and median P/QRS/PQ/QT intervals
 - the Physio-QC BP filter, delineator, and calibration-artifact exclusion
 - Physio-QC respiratory-belt and BreathMetrics pneumotach processing
 - the Physio-QC ETCO2 envelope extractor after A8 voltage conversion

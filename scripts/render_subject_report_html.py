@@ -177,21 +177,20 @@ def _embed_image(fig_path: str | None) -> str | None:
     return f"data:{mime};base64,{data}"
 
 
-def _figure_card(title: str, subtitle: str, fig_path: str | None, alt: str) -> str:
+def _figure_card(title: str, subtitle: str, fig_path: str | None, alt: str, show_header: bool = True) -> str:
     src = _embed_image(fig_path)
     if src:
         media = f'<img class="report-image" src="{src}" alt="{_escape(alt)}">'
     else:
         media = f'<div class="figure-empty">Figure not available: {_escape(title)}</div>'
-    return (
-        '<div class="card chart-card">'
+    header = (
         '<div class="chart-title">'
         f'<strong>{_escape(title)}</strong>'
         f'<span>{_escape(subtitle)}</span>'
         '</div>'
-        f'{media}'
-        '</div>'
-    )
+    ) if show_header else ""
+    card_class = "card chart-card" if show_header else "card chart-card no-header"
+    return f'<div class="{card_class}">{header}{media}</div>'
 
 
 # Predicted-range (LLN/ULN) values come from merge_subject_all_metrics_only.py,
@@ -436,6 +435,7 @@ def _render_spirometry(bundle: dict) -> str:
 
 def _render_resting(bundle: dict) -> str:
     whole = bundle.get("whole", {})
+    figures = bundle.get("figures", {})
     body = (
         '<div class="measure-groups">'
         '<div class="card measure-group" style="--group-color:var(--accent-deep)"><h3>1. ECG measures</h3><div class="measure-list">'
@@ -464,13 +464,29 @@ def _render_resting(bundle: dict) -> str:
         + '</div></div>'
         '</div>'
         '<div class="legend"><span style="--legend-color:var(--accent-deep)">ECG / heart rate</span><span style="--legend-color:var(--success)">Blood pressure</span><span style="--legend-color:var(--respiratory)">Respiratory</span><span style="--legend-color:var(--doppler)">Doppler</span></div>'
+        '<h3 class="section-heading">Average resting ECG waveform</h3>'
+        '<div class="grid grid-2">'
+        + _figure_card(
+            "Average ECG beat",
+            "R-aligned average of quality-screened resting beats",
+            figures.get("REST_ECG_AVERAGE"),
+            "Average resting ECG waveform with delineation landmarks",
+            show_header=False,
+        )
+        + '<div class="grid grid-2">'
+        + _metric_card("P duration", whole.get("ecg_p_duration_ms"), "ms")
+        + _metric_card("QRS duration", whole.get("ecg_qrs_duration_ms"), "ms")
+        + _metric_card("PQ time", whole.get("ecg_pq_time_ms"), "ms")
+        + _metric_card("QT time", whole.get("ecg_qt_time_ms"), "ms")
+        + '</div>'
+        + '</div>'
         + _task_note(bundle, "rest") +
         '<div class="disclosure"><button type="button">About HRV measures +</button><div class="disclosure-content">RMSSD is a time-domain heart-rate-variability measure associated primarily with parasympathetic activity. LF/HF is often reported as a frequency-domain index; interpretation remains context dependent.</div></div>'
     )
     return _page(
         "cardiovascular",
         "Section 03",
-        "Resting cardiovascular",
+        "Cardiovascular Function At Rest",
         "04 / Resting state",
         "Resting measurements are organized by recording modality, with Doppler summaries calculated after noisy-window exclusion.",
         body,
@@ -501,6 +517,17 @@ def _render_autonomic_overview(bundle: dict) -> str:
 def _render_sts(bundle: dict) -> str:
     whole = bundle.get("whole", {})
     figures = bundle.get("figures", {})
+    sts_metrics = _task_section(bundle, "sts")
+    doppler_included = _as_float(sts_metrics.get("doppler_plot_included")) == 1.0
+    figure_title = (
+        "Heart rate, mean blood pressure, and Doppler velocity"
+        if doppler_included else "Heart rate and mean blood pressure"
+    )
+    figure_subtitle = (
+        "Doppler passed the supine and standing quality checks"
+        if doppler_included
+        else "Doppler is omitted when unavailable or when either quality check is below 0.8"
+    )
     body = (
         '<div class="grid grid-4">'
         + _metric_card("Baseline HR", whole.get("baseline_HR"), "bpm")
@@ -509,7 +536,7 @@ def _render_sts(bundle: dict) -> str:
         + _metric_card("Delta BP", whole.get("delta_BP"), "mmHg", signed=True)
         + '</div>'
         '<h3 class="section-heading">Transition trend</h3>'
-        + _figure_card("Heart rate and mean blood pressure", "Source-derived figure", figures.get("STS_HR_MAP"), "Supine to stand figure")
+        + _figure_card(figure_title, figure_subtitle, figures.get("STS_HR_MAP"), "Supine-to-stand cardiovascular response figure")
         + _task_note(bundle, "sts") +
         '<div class="disclosure"><button type="button">About orthostatic response +</button><div class="disclosure-content">Orthostatic intolerance describes symptoms that occur on standing and improve when lying down. Formal interpretation considers symptoms, timing, heart-rate change, blood-pressure change, medications, and clinical context.</div></div>'
     )

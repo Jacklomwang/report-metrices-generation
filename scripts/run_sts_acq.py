@@ -20,6 +20,17 @@ from src.bp_processing import (
     detect_bp_troughs,
     compute_bp_derived_from_peaks,
 )
+from src.physio_qc.metrics.doppler import process_doppler
+
+
+DOPPLER_PARAMS = {
+    "filter_method": "sg_wavelet", "filter_order": 3, "cutoff_freq": 25,
+    "lowcut": 0.5, "highcut": 15.0, "apply_lowcut": True, "apply_highcut": True,
+    "sg_win": 0.1, "wavelet": "db6", "level": 10, "alpha": 4.0,
+    "drop_levels": 1, "trend_win": 2.0,
+}
+
+
 def moving_average_seconds(x, fs, win_sec=5.0, pad_mode="edge"):
     """
     Centered moving average with padding to avoid start/end artifacts.
@@ -52,57 +63,76 @@ def save_sts_summary_figure(
     out_png: Path,
     t_hr: np.ndarray, hr_ts: np.ndarray,
     t_bp: np.ndarray, map_ts: np.ndarray,
+    stand_onset: float,
     sup_start: float, sup_end: float,
     plt_start: float, plt_end: float,
     mean_hr_sup: float, mean_hr_plt: float, dhr: float,
     mean_map_sup: float, mean_map_plt: float, dmap: float, fs=250.0,
+    t_doppler: np.ndarray | None = None,
+    doppler_mean_ts: np.ndarray | None = None,
     ):
-        import os
-        import matplotlib
-        if not os.environ.get("DISPLAY"):
-            matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        hr_smooth  = moving_average_seconds(hr_ts, fs, win_sec=2.0)
-        map_smooth = moving_average_seconds(map_ts, fs, win_sec=2.0)
+    import os
+    import matplotlib
+    if not os.environ.get("DISPLAY"):
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
 
-        fig = plt.figure(figsize=(10, 6))
+    has_doppler = (
+        t_doppler is not None and doppler_mean_ts is not None
+        and len(t_doppler) and np.isfinite(np.asarray(doppler_mean_ts, dtype=float)).any()
+    )
+    n_panels = 3 if has_doppler else 2
+    fig, axes = plt.subplots(n_panels, 1, figsize=(12, 8 if has_doppler else 6.2), sharex=True)
+    axes = np.atleast_1d(axes)
 
-        # --- HR subplot
-        ax1 = plt.subplot(2, 1, 1)
-        ax1.plot(t_hr, hr_smooth, color="red", linestyle="--", linewidth=1)
+    hr_smooth = moving_average_seconds(hr_ts, fs, win_sec=2.0)
+    map_smooth = moving_average_seconds(map_ts, fs, win_sec=2.0)
+    axes[0].plot(t_hr, hr_smooth, color="#C2413B", linewidth=1.35)
+    axes[0].set_title("Heart Rate", loc="left")
+    axes[0].set_ylabel("Heart rate (bpm)")
+    axes[1].plot(t_bp, map_smooth, color="#1D4ED8", linewidth=1.35)
+    axes[1].set_title("Mean Arterial Pressure", loc="left")
+    axes[1].set_ylabel("MAP (mmHg)")
 
-        ax1.hlines(mean_hr_sup, sup_start, sup_end, colors="black", linewidth=3)
-        ax1.hlines(mean_hr_plt, plt_start, plt_end, colors="black", linewidth=3)
+    if has_doppler:
+        doppler_values = np.asarray(doppler_mean_ts, dtype=float)
+        doppler_time = np.asarray(t_doppler, dtype=float)
+        if len(doppler_time) > 1:
+            doppler_fs = 1.0 / np.nanmedian(np.diff(doppler_time))
+            doppler_values = moving_average_seconds(doppler_values, doppler_fs, win_sec=2.0)
+        axes[2].plot(doppler_time, doppler_values, color="#047857", linewidth=1.35)
+        axes[2].set_title("Mean Doppler Velocity", loc="left")
+        axes[2].set_ylabel("Velocity (cm/s)")
 
-        ax1.set_title("Heart Rate")
-        ax1.set_ylabel("Heart Rate (bpm)")
-        ax1.set_xlabel("Time (s)")
-        ax1.grid(True, alpha=0.3)
+    def interval_bracket(axis, start: float, end: float, label: str, color: str) -> None:
+        y = 1.035
+        transform = axis.get_xaxis_transform()
+        axis.plot([start, end], [y, y], transform=transform, color=color, linewidth=2.0, clip_on=False)
+        axis.plot([start, start], [y - 0.025, y + 0.025], transform=transform,
+                  color=color, linewidth=2.0, clip_on=False)
+        axis.plot([end, end], [y - 0.025, y + 0.025], transform=transform,
+                  color=color, linewidth=2.0, clip_on=False)
+        axis.text((start + end) / 2.0, y + 0.015, label, transform=transform,
+                  color=color, fontsize=8, fontweight="bold", ha="center", va="bottom", clip_on=False)
 
-        ax1.text(sup_start, np.nanmax(hr_ts)*0.95, f"Baseline HR: {mean_hr_sup:.1f} bpm", fontsize=10)
-        ax1.text(plt_start, np.nanmax(hr_ts)*0.95, f"Plateau HR: {mean_hr_plt:.1f} bpm", fontsize=10)
-        ax1.text(plt_start, np.nanmin(hr_ts)*1.05, f"ΔHR: {dhr:.1f} bpm", fontsize=10)
+    # The panels share time, so one set of brackets identifies the analysis
+    # windows without drawing reference lines over each physiological trace.
+    interval_bracket(axes[0], sup_start, sup_end, "Baseline window", "#2563EB")
+    interval_bracket(axes[0], plt_start, plt_end, "Plateau window", "#047857")
 
-        # --- MAP subplot
-        ax2 = plt.subplot(2, 1, 2)
-        ax2.plot(t_bp, map_smooth, color="blue", linestyle="--", linewidth=1)
+    for index, axis in enumerate(axes):
+        axis.axvline(stand_onset, color="#B45309", linestyle=":", linewidth=1.5)
+        axis.grid(axis="y", alpha=0.18)
+        if index == 0:
+            axis.text(stand_onset, 0.96, "Stand onset", transform=axis.get_xaxis_transform(),
+                      color="#92400E", fontsize=9, fontweight="bold", ha="left", va="top")
 
-        ax2.hlines(mean_map_sup, sup_start, sup_end, colors="black", linewidth=3)
-        ax2.hlines(mean_map_plt, plt_start, plt_end, colors="black", linewidth=3)
-
-        ax2.set_title("Mean Arterial Pressure")
-        ax2.set_ylabel("Mean BP (mmHg)")
-        ax2.set_xlabel("Time (s)")
-        ax2.grid(True, alpha=0.3)
-
-        ax2.text(sup_start, np.nanmax(map_ts)*0.95, f"Baseline MAP: {mean_map_sup:.1f} mmHg", fontsize=10)
-        ax2.text(plt_start, np.nanmax(map_ts)*0.95, f"Plateau MAP: {mean_map_plt:.1f} mmHg", fontsize=10)
-        ax2.text(plt_start, np.nanmin(map_ts)*1.05, f"ΔMAP: {dmap:.1f} mmHg", fontsize=10)
-
-        plt.tight_layout()
-        out_png.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(out_png, dpi=150)
-        plt.close(fig)
+    axes[-1].set_xlabel("Time (s)")
+    fig.suptitle("Supine-to-Stand Cardiovascular Response", fontsize=15, y=0.995)
+    fig.tight_layout(rect=(0, 0, 1, 0.98), h_pad=1.2)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_png, dpi=180, bbox_inches="tight", pad_inches=0.08)
+    plt.close(fig)
 
 def build_sts_acq_path(root: Path, sub_code: str, ses_num: str) -> Path:
     sub_id = f"sub-{sub_code}"
@@ -139,6 +169,34 @@ def pick_channel_by_index(channels, ch_num: int, one_based: bool):
             f"but file has {len(channels)} channels."
         )
     return channels[idx], idx
+
+
+def detect_doppler_channel(channels):
+    """Find the Doppler waveform using the standard LCS A6 naming convention."""
+    patterns = ("doppler", "a6", "a 6", "a5", "a 5")
+    for index, channel in enumerate(channels):
+        name = str(getattr(channel, "name", "") or "").lower()
+        if any(pattern in name for pattern in patterns):
+            return channel, index
+    return None, None
+
+
+def mean_beat_quality_in_window(trough_indices, beat_scores, sampling_rate, start_s, end_s):
+    """Return a duration-weighted mean quality for beats overlapping a time window."""
+    troughs = np.asarray(trough_indices, dtype=float).ravel()
+    scores = np.asarray(beat_scores, dtype=float).ravel()
+    n_beats = min(len(scores), max(len(troughs) - 1, 0))
+    if n_beats <= 0 or sampling_rate <= 0 or end_s <= start_s:
+        return np.nan
+
+    beat_starts = troughs[:n_beats] / sampling_rate
+    beat_ends = troughs[1:n_beats + 1] / sampling_rate
+    scores = scores[:n_beats]
+    overlap = np.maximum(0.0, np.minimum(beat_ends, end_s) - np.maximum(beat_starts, start_s))
+    valid = (overlap > 0) & np.isfinite(scores)
+    if not np.any(valid):
+        return np.nan
+    return float(np.sum(scores[valid] * overlap[valid]) / np.sum(overlap[valid]))
 
 
 def plot_qc(sub_id: str, ses_id: str, fs: float,
@@ -224,6 +282,7 @@ def main():
 
     ap.add_argument("--ecg_ch", type=int, required=True, help="ECG channel number")
     ap.add_argument("--bp_ch", type=int, required=True, help="BP channel number")
+    ap.add_argument("--doppler_ch", type=int, default=None, help="Optional Doppler fallback channel number")
     ap.add_argument("--one_based", action="store_true", help="Interpret channel numbers as 1-based")
     ap.add_argument("--ecg_method", default="neurokit", help="NeuroKit ECG processing method")
 
@@ -240,6 +299,11 @@ def main():
     ap.add_argument("--plot_outdir", default="outputs", help="Where to save plot if no DISPLAY")
     # Around line 170
     ap.add_argument("--height", type=float, default=0.0, help="Subject height in cm for hydrostatic correction")
+    ap.add_argument("--stand_onset_s", type=float, default=300.0, help="Standing onset in seconds (default 300)")
+    ap.add_argument(
+        "--doppler_quality_threshold", type=float, default=0.8,
+        help="Minimum mean beat quality required in both supine and standing periods (default 0.8)",
+    )
     args = ap.parse_args()
 
     root = Path(args.root)
@@ -264,8 +328,15 @@ def main():
 
     ecg_ch, ecg_idx = pick_channel_by_index(d.channels, args.ecg_ch, args.one_based)
     bp_ch, bp_idx = pick_channel_by_index(d.channels, args.bp_ch, args.one_based)
+    doppler_ch, doppler_idx = detect_doppler_channel(d.channels)
+    if doppler_ch is None and args.doppler_ch is not None:
+        doppler_ch, doppler_idx = pick_channel_by_index(d.channels, args.doppler_ch, args.one_based)
     print(f"[INFO] ECG channel index={ecg_idx} name={getattr(ecg_ch,'name','')}")
     print(f"[INFO]  BP channel index={bp_idx} name={getattr(bp_ch,'name','')}")
+    if doppler_ch is not None:
+        print(f"[INFO] Doppler channel index={doppler_idx} name={getattr(doppler_ch,'name','')}")
+    else:
+        print("[INFO] Doppler channel not found; STS figure will use HR and MAP panels only.")
 
     ecg = np.asarray(ecg_ch.data, dtype=float)
     bp_raw = np.asarray(bp_ch.data, dtype=float)
@@ -285,6 +356,7 @@ def main():
 
     t = np.arange(len(bp_filt)) / fs
         # STS windows (seconds)
+    stand_onset = float(args.stand_onset_s)
     supine_start, supine_end = 60.0, 240.0      # min 1-4
     plateau_start, plateau_end = 600.0, 780.0   # min 6-13
 
@@ -301,12 +373,12 @@ def main():
     # Apply to the time-series itself for t > 5 mins (300s)
     if args.height > 0:
         bp_offset = 0.4*0.77* args.height
-        plot_mask_standing = (t >= 300.0)
+        plot_mask_standing = (t >= stand_onset)
         
         map_interp[plot_mask_standing] -= bp_offset
         systolic_interp[plot_mask_standing] -= bp_offset
         diastolic_interp[plot_mask_standing] -= bp_offset
-        print(f"[INFO] Applied height correction: -{bp_offset:.2f} mmHg (t >= 300s)")
+        print(f"[INFO] Applied height correction: -{bp_offset:.2f} mmHg (t >= {stand_onset:g}s)")
 
     # 3. CALCULATE MEANS (Pulling from the already adjusted map_interp)
     def mean_in_window(x, mask):
@@ -333,6 +405,58 @@ def main():
     dSYS = mean_sys_plt - mean_sys_sup
     dDIA = mean_dia_plt - mean_dia_sup
     dPP  = mean_pp_plt  - mean_pp_sup
+
+    # ---- Doppler mean velocity (optional)
+    doppler_result = None
+    doppler_time = np.array([], dtype=float)
+    doppler_mean_velocity = np.array([], dtype=float)
+    mean_doppler_sup = mean_doppler_plt = d_doppler = np.nan
+    doppler_quality_supine = doppler_quality_standing = np.nan
+    doppler_plot_allowed = False
+    doppler_status = "channel not found"
+    if doppler_ch is not None:
+        try:
+            doppler_result = process_doppler(np.asarray(doppler_ch.data, dtype=float), fs, DOPPLER_PARAMS)
+            if not doppler_result:
+                raise ValueError("insufficient Doppler peaks/troughs")
+            doppler_time = np.asarray(doppler_result["time_4hz"], dtype=float)
+            doppler_mean_velocity = np.asarray(doppler_result["map_4hz"], dtype=float)
+            doppler_sup_mask = (doppler_time >= supine_start) & (doppler_time < supine_end)
+            doppler_plt_mask = (doppler_time >= plateau_start) & (doppler_time < plateau_end)
+            mean_doppler_sup = mean_in_window(doppler_mean_velocity, doppler_sup_mask)
+            mean_doppler_plt = mean_in_window(doppler_mean_velocity, doppler_plt_mask)
+            d_doppler = mean_doppler_plt - mean_doppler_sup
+            recording_end = len(doppler_result["filtered"]) / fs
+            doppler_quality_supine = mean_beat_quality_in_window(
+                doppler_result["current_troughs"], doppler_result.get("beat_scores", []),
+                fs, 0.0, min(stand_onset, recording_end),
+            )
+            doppler_quality_standing = mean_beat_quality_in_window(
+                doppler_result["current_troughs"], doppler_result.get("beat_scores", []),
+                fs, stand_onset, recording_end,
+            )
+            doppler_plot_allowed = bool(
+                np.isfinite(doppler_quality_supine)
+                and np.isfinite(doppler_quality_standing)
+                and doppler_quality_supine >= args.doppler_quality_threshold
+                and doppler_quality_standing >= args.doppler_quality_threshold
+            )
+            if doppler_plot_allowed:
+                doppler_status = "available; quality threshold passed"
+            else:
+                doppler_status = "quality threshold failed; panel omitted"
+                print(
+                    "[WARN] STS Doppler panel omitted: "
+                    f"supine quality={doppler_quality_supine:.3f}, "
+                    f"standing quality={doppler_quality_standing:.3f}, "
+                    f"required>={args.doppler_quality_threshold:.3f}"
+                )
+        except Exception as exc:
+            print(f"[WARN] STS Doppler processing unavailable: {exc}")
+            doppler_result = None
+            doppler_time = np.array([], dtype=float)
+            doppler_mean_velocity = np.array([], dtype=float)
+            doppler_status = str(exc)
 
 
     # ---- ECG/HRV
@@ -393,10 +517,13 @@ def main():
         out_png=fig_path,
         t_hr=t_hr, hr_ts=hr_ts,
         t_bp=t, map_ts=map_interp,
+        stand_onset=stand_onset,
         sup_start=supine_start, sup_end=supine_end,
         plt_start=plateau_start, plt_end=plateau_end,
         mean_hr_sup=mean_HR_sup, mean_hr_plt=mean_HR_plt, dhr=dHR,
         mean_map_sup=mean_MAP_sup, mean_map_plt=mean_MAP_plt, dmap=dMAP,
+        t_doppler=doppler_time if doppler_plot_allowed else None,
+        doppler_mean_ts=doppler_mean_velocity if doppler_plot_allowed else None,
     )
     print(f"[OK] Saved STS summary figure: {fig_path}")
 
@@ -407,6 +534,15 @@ def main():
     print(f"Supine (1-4min):  MAP={mean_MAP_sup:.2f} SYS={mean_sys_sup:.2f} DIA={mean_dia_sup:.2f} PP={mean_pp_sup:.2f} | HR={mean_HR_sup:.2f} RMSSD={RMSSD_sup:.2f}ms")
     print(f"Plateau (6-13min): MAP={mean_MAP_plt:.2f} SYS={mean_sys_plt:.2f} DIA={mean_dia_plt:.2f} PP={mean_pp_plt:.2f} | HR={mean_HR_plt:.2f} RMSSD={RMSSD_plt:.2f}ms")
     print(f"Delta (plt-sup):   dMAP={dMAP:.2f} dSYS={dSYS:.2f} dDIA={dDIA:.2f} dPP={dPP:.2f} | dHR={dHR:.2f} dRMSSD={dRMSSD:.2f}ms")
+    if doppler_result:
+        print(f"Doppler mean velocity: baseline={mean_doppler_sup:.2f} plateau={mean_doppler_plt:.2f} "
+              f"delta={d_doppler:.2f} cm/s")
+        print(
+            f"Doppler quality: supine={doppler_quality_supine:.3f} "
+            f"standing={doppler_quality_standing:.3f} "
+            f"threshold={args.doppler_quality_threshold:.3f} "
+            f"panel={'included' if doppler_plot_allowed else 'omitted'}"
+        )
 
 
     # ---- QC Plot
@@ -435,6 +571,7 @@ def main():
         "supine_end_s": float(supine_end),
         "plateau_start_s": float(plateau_start),
         "plateau_end_s": float(plateau_end),
+        "stand_onset_s": float(stand_onset),
 
         # ---- BP: Supine
         "mean_MAP_sup": float(mean_MAP_sup),
@@ -467,6 +604,17 @@ def main():
         # ---- ECG: Deltas
         "dHR": float(dHR),
         "dRMSSD_ms": float(dRMSSD),
+
+        # ---- Doppler: optional mean velocity
+        "mean_doppler_sup": float(mean_doppler_sup),
+        "mean_doppler_plt": float(mean_doppler_plt),
+        "d_doppler": float(d_doppler),
+        "doppler_quality_supine": float(doppler_quality_supine),
+        "doppler_quality_standing": float(doppler_quality_standing),
+        "doppler_quality_threshold": float(args.doppler_quality_threshold),
+        "doppler_plot_included": int(doppler_plot_allowed),
+        "doppler_status": doppler_status,
+        "doppler_channel_index": int(doppler_idx) if doppler_idx is not None else -1,
 
         # ---- Counts / QC
         "n_bp_peaks": int(len(peaks)),

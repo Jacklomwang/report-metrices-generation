@@ -311,6 +311,10 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
     whole["mean_HR"] = _first_present(rest, ["mean_HR", "mean_hr"], np.nan)
     whole["RMSSD"] = _first_present(rest, ["RMSSD_ms", "RMSSD", "rmssd_ms"], np.nan)
     whole["LF_HF_ratio"] = _first_present(rest, ["LF_HF", "LF_HF_ratio", "lf_hf", "LF_HF_power"], np.nan)
+    whole["ecg_p_duration_ms"] = _first_present(rest, ["ecg_p_duration_ms"], np.nan)
+    whole["ecg_qrs_duration_ms"] = _first_present(rest, ["ecg_qrs_duration_ms"], np.nan)
+    whole["ecg_pq_time_ms"] = _first_present(rest, ["ecg_pq_time_ms"], np.nan)
+    whole["ecg_qt_time_ms"] = _first_present(rest, ["ecg_qt_time_ms"], np.nan)
     whole["mean_br"] = _first_present(rest, ["mean_br", "breathing_rate_bpm"], np.nan)
     whole["mean_etco2"] = _first_present(rest, ["mean_etco2", "etco2_mean"], np.nan)
     whole["mean_tidal_volume_ml"] = _first_present(rest, ["mean_tidal_volume_ml", "mean_tidal_volume"], np.nan)
@@ -414,6 +418,7 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
     figs = {
         "REST_HR": _first_existing(base / "rest" / "resting_hr.png"),
         "REST_BP": _first_existing(base / "rest" / "resting_BP.png"),
+        "REST_ECG_AVERAGE": _first_existing(base / "rest" / "resting_ecg_average.png"),
         "STS_HR_MAP": _first_existing(
             base / "sts" / "STS_HR_MAP.png",
             base / "sts" / "STS_HR_MAP_plot.png",

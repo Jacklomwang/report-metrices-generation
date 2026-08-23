@@ -207,15 +207,18 @@ def save_valsalva_hr_bp_figure(
     if not hr_mask.any() or not raw_bp_mask.any() or not map_mask.any():
         raise ValueError("selected Valsalva BP window contains no samples")
 
-    fig, (hr_ax, bp_ax) = plt.subplots(2, 1, figsize=(14, 6.4), sharex=True)
-    hr_ax.plot(hr_time[hr_mask], raw_hr[hr_mask], color="#64748B", linewidth=1.0,
-               alpha=0.24, label="Unfiltered HR")
-    hr_ax.plot(hr_time[hr_mask], filtered_hr[hr_mask], color="#1D4ED8", linewidth=2.0,
+    fig, (hr_ax, bp_ax) = plt.subplots(2, 1, figsize=(15.5, 8.4), sharex=True)
+    hr_ax.plot(hr_time[hr_mask], raw_hr[hr_mask], color="#64748B", linewidth=1.1,
+               alpha=0.22, label="Unfiltered HR")
+    hr_ax.plot(hr_time[hr_mask], filtered_hr[hr_mask], color="#1D4ED8", linewidth=2.4,
                label="Artifact-rejected median HR")
-    hr_ax.set_title("Heart Rate", fontsize=13, loc="left")
-    hr_ax.set_ylabel("Heart rate (bpm)")
+    hr_ax.set_title("Heart Rate", fontsize=14, loc="left", pad=11)
+    hr_ax.set_ylabel("Heart rate (bpm)", fontsize=11)
     hr_ax.grid(axis="y", alpha=0.18)
-    hr_ax.legend(loc="upper right", fontsize=8, frameon=False)
+    hr_ax.legend(
+        loc="lower right", bbox_to_anchor=(1.0, 1.01), ncol=2,
+        fontsize=10, frameon=False, borderaxespad=0.0,
+    )
 
     events = landmarks.get("events", {}) if landmarks else {}
     boundaries = [
@@ -232,11 +235,11 @@ def save_valsalva_hr_bp_figure(
         bp_ax.axvspan(start, end, color=color, alpha=0.22, linewidth=0)
         text_y = 0.97 if index % 2 == 0 else 0.91
         bp_ax.text((start + end) / 2.0, text_y, label, transform=bp_ax.get_xaxis_transform(),
-                   ha="center", va="top", fontsize=8, fontweight="bold")
+                   ha="center", va="top", fontsize=10, fontweight="bold")
 
-    bp_ax.plot(raw_bp_time[raw_bp_mask], raw_bp[raw_bp_mask], color="#64748B", linewidth=0.6,
-               alpha=0.24, label="Raw continuous BP")
-    bp_ax.plot(map_time[map_mask], map_values[map_mask], color="#047857", linewidth=2.2,
+    bp_ax.plot(raw_bp_time[raw_bp_mask], raw_bp[raw_bp_mask], color="#64748B", linewidth=0.75,
+               alpha=0.22, label="Raw continuous BP")
+    bp_ax.plot(map_time[map_mask], map_values[map_mask], color="#047857", linewidth=2.5,
                label="Derived MAP")
     for event in events.values():
         event_time = event["time"]
@@ -247,18 +250,27 @@ def save_valsalva_hr_bp_figure(
                      label="Strain start" if axis is bp_ax else None)
         axis.axvline(TASK_END_SECONDS, color="#B45309", linestyle="--", linewidth=1.5,
                      label="Strain release" if axis is bp_ax else None)
-    hr_ax.text(0.0, 0.97, "Strain start", transform=hr_ax.get_xaxis_transform(), ha="left", va="top",
-               color="#9F2D2A", fontsize=8, fontweight="bold")
-    hr_ax.text(TASK_END_SECONDS, 0.97, "Release", transform=hr_ax.get_xaxis_transform(), ha="left", va="top",
-               color="#92400E", fontsize=8, fontweight="bold")
-    bp_ax.set_title("Blood Pressure and MAP-Defined Phases", fontsize=13, loc="left")
-    bp_ax.set_xlabel("Time relative to strain start (s)", fontsize=11)
-    bp_ax.set_ylabel("Blood pressure (mmHg)")
+    hr_ax.text(
+        0.0, 1.015, "Strain start", transform=hr_ax.get_xaxis_transform(),
+        ha="center", va="bottom", color="#9F2D2A", fontsize=10,
+        fontweight="bold", clip_on=False,
+    )
+    hr_ax.text(
+        TASK_END_SECONDS, 1.015, "Release", transform=hr_ax.get_xaxis_transform(),
+        ha="center", va="bottom", color="#92400E", fontsize=10,
+        fontweight="bold", clip_on=False,
+    )
+    bp_ax.set_title("Blood Pressure and MAP-Defined Phases", fontsize=14, loc="left", pad=11)
+    bp_ax.set_xlabel("Time relative to strain start (s)", fontsize=12)
+    bp_ax.set_ylabel("Blood pressure (mmHg)", fontsize=11)
     bp_ax.set_xlim(EPOCH_START_SECONDS, EPOCH_END_SECONDS)
     bp_ax.grid(axis="y", alpha=0.18)
-    bp_ax.legend(loc="upper right", fontsize=8, frameon=False, ncol=2)
-    fig.suptitle("Valsalva Cardiovascular Response", fontsize=16, y=0.995)
-    fig.tight_layout()
+    bp_ax.legend(
+        loc="lower right", bbox_to_anchor=(1.0, 1.01), ncol=4,
+        fontsize=10, frameon=False, borderaxespad=0.0,
+    )
+    fig.suptitle("Valsalva Cardiovascular Response", fontsize=17, y=0.995)
+    fig.tight_layout(rect=(0, 0, 1, 0.96), h_pad=2.5)
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_png, dpi=200, bbox_inches="tight", pad_inches=0.05)
+    fig.savefig(out_png, dpi=220, bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)

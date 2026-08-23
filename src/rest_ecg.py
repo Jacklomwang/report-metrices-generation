@@ -127,8 +127,10 @@ def save_average_ecg_figure(out_png: Path, morphology: dict) -> None:
     waveform_min = float(np.nanmin(mean - std))
     waveform_max = float(np.nanmax(mean + std))
     waveform_span = max(waveform_max - waveform_min, 1e-6)
-    first_row = waveform_min - 0.13 * waveform_span
-    second_row = waveform_min - 0.30 * waveform_span
+    p_duration_row = waveform_min - 0.10 * waveform_span
+    qrs_duration_row = waveform_min - 0.24 * waveform_span
+    pq_time_row = waveform_min - 0.38 * waveform_span
+    qt_time_row = waveform_min - 0.52 * waveform_span
     bracket_color = "#0891B2"
 
     def landmark(key: str) -> float:
@@ -149,14 +151,14 @@ def save_average_ecg_figure(out_png: Path, morphology: dict) -> None:
     qrs_onset = landmark("ECG_R_Onsets")
     qrs_offset = landmark("ECG_R_Offsets")
     t_offset = landmark("ECG_T_Offsets")
-    interval_bracket(p_onset, p_offset, first_row, "P duration")
-    interval_bracket(qrs_onset, qrs_offset, first_row, "QRS duration")
-    interval_bracket(p_onset, qrs_onset, second_row, "PQ time")
-    interval_bracket(qrs_onset, t_offset, second_row, "QT time")
+    interval_bracket(p_onset, p_offset, p_duration_row, "P duration")
+    interval_bracket(qrs_onset, qrs_offset, qrs_duration_row, "QRS duration")
+    interval_bracket(p_onset, qrs_onset, pq_time_row, "PQ time")
+    interval_bracket(qrs_onset, t_offset, qt_time_row, "QT time")
 
     ax.axhline(0.0, color="#64748B", linestyle="--", linewidth=0.8, alpha=0.55)
     ax.axvline(0.0, color="#1E293B", linewidth=0.7, alpha=0.35)
-    ax.set_ylim(waveform_min - 0.40 * waveform_span, waveform_max + 0.08 * waveform_span)
+    ax.set_ylim(waveform_min - 0.62 * waveform_span, waveform_max + 0.08 * waveform_span)
     ax.set(title=f"Average Resting ECG ({average['n_beats']} beats)",
            xlabel="Time relative to R peak (ms)", ylabel="ECG amplitude (a.u.)")
     ax.minorticks_on()

@@ -517,17 +517,6 @@ def _render_autonomic_overview(bundle: dict) -> str:
 def _render_sts(bundle: dict) -> str:
     whole = bundle.get("whole", {})
     figures = bundle.get("figures", {})
-    sts_metrics = _task_section(bundle, "sts")
-    doppler_included = _as_float(sts_metrics.get("doppler_plot_included")) == 1.0
-    figure_title = (
-        "Heart rate, mean blood pressure, and Doppler velocity"
-        if doppler_included else "Heart rate and mean blood pressure"
-    )
-    figure_subtitle = (
-        "Doppler passed the supine and standing quality checks"
-        if doppler_included
-        else "Doppler is omitted when unavailable or when either quality check is below 0.8"
-    )
     body = (
         '<div class="grid grid-4">'
         + _metric_card("Baseline HR", whole.get("baseline_HR"), "bpm")
@@ -535,8 +524,12 @@ def _render_sts(bundle: dict) -> str:
         + _metric_card("Delta HR", whole.get("delta_HR"), "bpm", signed=True)
         + _metric_card("Delta BP", whole.get("delta_BP"), "mmHg", signed=True)
         + '</div>'
-        '<h3 class="section-heading">Transition trend</h3>'
-        + _figure_card(figure_title, figure_subtitle, figures.get("STS_HR_MAP"), "Supine-to-stand cardiovascular response figure")
+        + '<div class="metric-figure-gap">'
+        + _figure_card(
+            "Supine-to-stand response", "", figures.get("STS_HR_MAP"),
+            "Supine-to-stand cardiovascular response figure", show_header=False,
+        )
+        + '</div>'
         + _task_note(bundle, "sts") +
         '<div class="disclosure"><button type="button">About orthostatic response +</button><div class="disclosure-content">Orthostatic intolerance describes symptoms that occur on standing and improve when lying down. Formal interpretation considers symptoms, timing, heart-rate change, blood-pressure change, medications, and clinical context.</div></div>'
     )
@@ -554,35 +547,29 @@ def _render_sts(bundle: dict) -> str:
 def _render_valsalva(bundle: dict) -> str:
     whole = bundle.get("whole", {})
     figures = bundle.get("figures", {})
-    phase_rows = [
-        ("Baseline", whole.get("valsalva_baseline_sbp"), whole.get("valsalva_baseline_map"), "Mean from -15 to 0 s", False),
-        ("Phase I", whole.get("sbp_phase1_from_baseline"), whole.get("map_phase1_from_baseline"), "Maximum relative to baseline", True),
-        ("Early Phase II", whole.get("sbp_phase2_early_fall"), whole.get("map_phase2_early_fall"), "Nadir relative to Phase I maximum", True),
-        ("Late Phase II", whole.get("sbp_phase2_late_recovery"), whole.get("map_phase2_late_recovery"), "Recovery relative to early Phase II nadir", True),
-        ("Phase III", whole.get("sbp_phase3_drop"), whole.get("map_phase3_drop"), "Nadir relative to late Phase II maximum", True),
-        ("Phase IV", whole.get("sbp_phase4_rise"), whole.get("map_phase4_rise"), "Rise relative to Phase III nadir", True),
-    ]
-    phase_table = '<div class="card"><table><thead><tr><th>BP phase</th><th>SBP value/change</th><th>MAP value/change</th><th>Definition</th></tr></thead><tbody>'
-    for label, sbp_value, map_value, definition, signed in phase_rows:
-        sbp_formatted = _format_number(sbp_value, signed=signed)
-        map_formatted = _format_number(map_value, signed=signed)
-        phase_table += f'<tr><td>{_escape(label)}</td><td>{sbp_formatted} mmHg</td><td>{map_formatted} mmHg</td><td>{_escape(definition)}</td></tr>'
-    phase_table += '</tbody></table></div>'
     body = (
         '<div class="grid grid-3">'
-        + _metric_card("Valsalva ratio", whole.get("Valsalva_ratio"), "", "Calculated from artifact-rejected median HR")
-        + _metric_card("Maximum HR", whole.get("Valsalva_max_HR"), "bpm", "Strain through 5 s after release")
-        + _metric_card("Minimum HR", whole.get("Valsalva_min_HR"), "bpm", "Recovery from release through 45 s")
+        + _metric_card(
+            "Valsalva ratio", whole.get("Valsalva_ratio"), "",
+            "Calculated from artifact-rejected median HR",
+        )
+        + _metric_card(
+            "Late Phase II MAP change", whole.get("map_phase2_late_recovery"), "mmHg",
+            "Recovery relative to early Phase II nadir", signed=True,
+        )
+        + _metric_card(
+            "Phase IV MAP change", whole.get("map_phase4_rise"), "mmHg",
+            "Rise relative to Phase III nadir", signed=True,
+        )
         + '</div>'
-        '<h3 class="section-heading">Synchronized waveforms</h3>'
+        + '<div class="metric-figure-gap">'
         + _figure_card(
-            "Heart rate and blood pressure response",
-            "Transparent raw traces with solid artifact-rejected median HR and derived MAP",
+            "Valsalva response", "",
             figures.get("Valsalva_plot"),
             "Synchronized Valsalva heart rate and blood pressure figure",
+            show_header=False,
         )
-        + '<h3 class="section-heading">Blood pressure changes by Valsalva phase</h3>'
-        + phase_table
+        + '</div>'
         + _task_note(bundle, "valsalva")
     )
     return _page(

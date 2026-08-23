@@ -124,8 +124,11 @@ def save_sts_summary_figure(
         axis.axvline(stand_onset, color="#B45309", linestyle=":", linewidth=1.5)
         axis.grid(axis="y", alpha=0.18)
         if index == 0:
-            axis.text(stand_onset, 0.96, "Stand onset", transform=axis.get_xaxis_transform(),
-                      color="#92400E", fontsize=9, fontweight="bold", ha="left", va="top")
+            axis.text(
+                stand_onset, 1.025, "Stand onset", transform=axis.get_xaxis_transform(),
+                color="#92400E", fontsize=9, fontweight="bold", ha="center", va="bottom",
+                clip_on=False,
+            )
 
     axes[-1].set_xlabel("Time (s)")
     fig.suptitle("Supine-to-Stand Cardiovascular Response", fontsize=15, y=0.995)

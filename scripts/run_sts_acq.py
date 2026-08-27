@@ -70,6 +70,7 @@ def save_sts_summary_figure(
     mean_map_sup: float, mean_map_plt: float, dmap: float, fs=250.0,
     t_doppler: np.ndarray | None = None,
     doppler_mean_ts: np.ndarray | None = None,
+    show_bp: bool = True,
     ):
     import os
     import matplotlib
@@ -81,18 +82,23 @@ def save_sts_summary_figure(
         t_doppler is not None and doppler_mean_ts is not None
         and len(t_doppler) and np.isfinite(np.asarray(doppler_mean_ts, dtype=float)).any()
     )
-    n_panels = 3 if has_doppler else 2
-    fig, axes = plt.subplots(n_panels, 1, figsize=(12, 8 if has_doppler else 6.2), sharex=True)
+    n_panels = 1 + int(show_bp) + int(has_doppler)
+    figure_height = {1: 4.5, 2: 6.2, 3: 8.0}[n_panels]
+    fig, axes = plt.subplots(n_panels, 1, figsize=(12, figure_height), sharex=True)
     axes = np.atleast_1d(axes)
 
     hr_smooth = moving_average_seconds(hr_ts, fs, win_sec=2.0)
-    map_smooth = moving_average_seconds(map_ts, fs, win_sec=2.0)
     axes[0].plot(t_hr, hr_smooth, color="#C2413B", linewidth=1.35)
     axes[0].set_title("Heart Rate", loc="left")
     axes[0].set_ylabel("Heart rate (bpm)")
-    axes[1].plot(t_bp, map_smooth, color="#1D4ED8", linewidth=1.35)
-    axes[1].set_title("Mean Arterial Pressure", loc="left")
-    axes[1].set_ylabel("MAP (mmHg)")
+
+    panel_index = 1
+    if show_bp:
+        map_smooth = moving_average_seconds(map_ts, fs, win_sec=2.0)
+        axes[panel_index].plot(t_bp, map_smooth, color="#1D4ED8", linewidth=1.35)
+        axes[panel_index].set_title("Mean Arterial Pressure", loc="left")
+        axes[panel_index].set_ylabel("MAP (mmHg)")
+        panel_index += 1
 
     if has_doppler:
         doppler_values = np.asarray(doppler_mean_ts, dtype=float)
@@ -100,9 +106,9 @@ def save_sts_summary_figure(
         if len(doppler_time) > 1:
             doppler_fs = 1.0 / np.nanmedian(np.diff(doppler_time))
             doppler_values = moving_average_seconds(doppler_values, doppler_fs, win_sec=2.0)
-        axes[2].plot(doppler_time, doppler_values, color="#047857", linewidth=1.35)
-        axes[2].set_title("Mean Doppler Velocity", loc="left")
-        axes[2].set_ylabel("Velocity (cm/s)")
+        axes[panel_index].plot(doppler_time, doppler_values, color="#047857", linewidth=1.35)
+        axes[panel_index].set_title("Mean Doppler Velocity", loc="left")
+        axes[panel_index].set_ylabel("Velocity (cm/s)")
 
     def interval_bracket(axis, start: float, end: float, label: str, color: str) -> None:
         y = 1.035
@@ -200,6 +206,35 @@ def mean_beat_quality_in_window(trough_indices, beat_scores, sampling_rate, star
     if not np.any(valid):
         return np.nan
     return float(np.sum(scores[valid] * overlap[valid]) / np.sum(overlap[valid]))
+
+
+def condition_median_bp_panel_allowed(
+    time_s, map_values, supine_start_s, supine_end_s,
+    standing_start_s, standing_end_s, lower=40.0, upper=200.0,
+):
+    """Check whether supine and standing-window median MAP values are plausible."""
+    time_s = np.asarray(time_s, dtype=float).ravel()
+    map_values = np.asarray(map_values, dtype=float).ravel()
+    n_values = min(len(time_s), len(map_values))
+    if n_values == 0:
+        return False, np.nan, np.nan
+
+    time_s = time_s[:n_values]
+    map_values = map_values[:n_values]
+    supine = map_values[(time_s >= supine_start_s) & (time_s < supine_end_s)]
+    standing = map_values[(time_s >= standing_start_s) & (time_s < standing_end_s)]
+    supine = supine[np.isfinite(supine)]
+    standing = standing[np.isfinite(standing)]
+    if supine.size == 0 or standing.size == 0:
+        return False, np.nan, np.nan
+
+    supine_median = float(np.median(supine))
+    standing_median = float(np.median(standing))
+    allowed = (
+        lower <= supine_median <= upper
+        and lower <= standing_median <= upper
+    )
+    return bool(allowed), supine_median, standing_median
 
 
 def plot_qc(sub_id: str, ses_id: str, fs: float,
@@ -383,6 +418,20 @@ def main():
         diastolic_interp[plot_mask_standing] -= bp_offset
         print(f"[INFO] Applied height correction: -{bp_offset:.2f} mmHg (t >= {stand_onset:g}s)")
 
+    bp_plot_allowed, supine_map_median, standing_map_median = condition_median_bp_panel_allowed(
+        t, map_interp,
+        supine_start, supine_end,
+        plateau_start, plateau_end,
+    )
+    bp_plot_status = "available; supine and standing median MAP within 40-200 mmHg"
+    if not bp_plot_allowed:
+        bp_plot_status = "supine or standing median MAP outside 40-200 mmHg; panel omitted"
+        print(
+            "[WARN] STS BP panel omitted: "
+            f"supine median MAP={supine_map_median:.2f} mmHg, "
+            f"standing median MAP={standing_map_median:.2f} mmHg"
+        )
+
     # 3. CALCULATE MEANS (Pulling from the already adjusted map_interp)
     def mean_in_window(x, mask):
         x = np.asarray(x)
@@ -527,6 +576,7 @@ def main():
         mean_map_sup=mean_MAP_sup, mean_map_plt=mean_MAP_plt, dmap=dMAP,
         t_doppler=doppler_time if doppler_plot_allowed else None,
         doppler_mean_ts=doppler_mean_velocity if doppler_plot_allowed else None,
+        show_bp=bp_plot_allowed,
     )
     print(f"[OK] Saved STS summary figure: {fig_path}")
 
@@ -575,6 +625,10 @@ def main():
         "plateau_start_s": float(plateau_start),
         "plateau_end_s": float(plateau_end),
         "stand_onset_s": float(stand_onset),
+        "sts_bp_plot_included": int(bp_plot_allowed),
+        "sts_bp_plot_status": bp_plot_status,
+        "supine_map_median": float(supine_map_median),
+        "standing_map_median": float(standing_map_median),
 
         # ---- BP: Supine
         "mean_MAP_sup": float(mean_MAP_sup),

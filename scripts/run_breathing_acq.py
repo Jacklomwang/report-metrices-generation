@@ -169,9 +169,7 @@ def save_breathing_hr_window_plot(
     hr_win: np.ndarray,
     peak_idx: np.ndarray,
     trough_idx: np.ndarray,
-    mean_max: float,
-    mean_min: float,
-    title: str = "Deep Breathing Heart Rate Responses",
+    title: str = "Deep Breathing Heart Rate Response",
 ):
     import os
     import matplotlib
@@ -179,10 +177,10 @@ def save_breathing_hr_window_plot(
         matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig = plt.figure(figsize=(10, 5))
+    fig = plt.figure(figsize=(12, 5.5))
     ax = plt.gca()
 
-    ax.plot(t_win, hr_win, linewidth=1.2)
+    ax.plot(t_win, hr_win, color="#1D4ED8", linewidth=1.5)
 
     # Mark peaks/troughs
     if peak_idx.size:
@@ -190,22 +188,18 @@ def save_breathing_hr_window_plot(
     if trough_idx.size:
         ax.plot(t_win[trough_idx], hr_win[trough_idx], "gv", markersize=6, label="Min HR (bottom 5)")
 
-    # Dashed horizontal lines
-    if np.isfinite(mean_max):
-        ax.axhline(mean_max, linestyle="--", linewidth=1.5)
-        ax.text(t_win[0], mean_max, f"  Mean Max HR: {mean_max:.2f} bpm", va="bottom")
-    if np.isfinite(mean_min):
-        ax.axhline(mean_min, linestyle="--", linewidth=1.5)
-        ax.text(t_win[0], mean_min, f"  Mean Min HR: {mean_min:.2f} bpm", va="bottom")
-
-    ax.set_title(title)
+    ax.set_title(title, loc="left", pad=12)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Heart Rate (bpm)")
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="best")
+    ax.grid(False)
+    ax.legend(
+        loc="lower right", bbox_to_anchor=(1.0, 1.01), ncol=2,
+        frameon=False, borderaxespad=0.0,
+    )
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_png, dpi=150)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig(out_png, dpi=180, bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
 
 
@@ -408,9 +402,7 @@ def main():
             hr_win=hr_det,          # plot the same curve used for selection
             peak_idx=pk_sel,
             trough_idx=tr_sel,
-            mean_max=mean_max,
-            mean_min=mean_min,
-            title=f"Deep Breathing Heart Rate Responses ({win_label})",
+            title="Deep Breathing Heart Rate Response",
         )
         print(f"[OK] Saved breathing plot: {plot_path}")
 

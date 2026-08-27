@@ -14,6 +14,7 @@ from pathlib import Path
 
 TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "html_report"
 TEMPLATE_PATH = TEMPLATE_DIR / "participant_report_template.html"
+AUTONOMIC_ASSET_DIR = TEMPLATE_DIR / "assets" / "autonomic"
 REPORT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPORT_ROOT / "src"
 
@@ -88,6 +89,16 @@ def _subject_label(sub_id: str) -> str:
 
 def _session_plain(ses_id: str) -> str:
     return ses_id.replace("ses-", "")
+
+
+def _format_scan_time(value) -> str:
+    if not value:
+        return "—"
+    try:
+        parsed = datetime.fromisoformat(str(value))
+        return parsed.strftime("%b %d, %Y %H:%M")
+    except Exception:
+        return _format_text(value)
 
 
 def _task_section(bundle: dict, key: str) -> dict:
@@ -191,6 +202,13 @@ def _figure_card(title: str, subtitle: str, fig_path: str | None, alt: str, show
     ) if show_header else ""
     card_class = "card chart-card" if show_header else "card chart-card no-header"
     return f'<div class="{card_class}">{header}{media}</div>'
+
+
+def _task_illustration(filename: str, alt: str) -> str:
+    src = _embed_image(str(AUTONOMIC_ASSET_DIR / filename))
+    if not src:
+        return f'<div class="figure-empty">Illustration not available: {_escape(alt)}</div>'
+    return f'<img class="task-illustration" src="{src}" alt="{_escape(alt)}">'
 
 
 # Predicted-range (LLN/ULN) values come from merge_subject_all_metrics_only.py,
@@ -306,8 +324,6 @@ def _task_note(bundle: dict, task: str) -> str:
 def _render_overview(bundle: dict, metadata: dict) -> str:
     whole = bundle.get("whole", {})
     missing = _missing_tasks(bundle)
-    missing_text = "None noted" if not missing else ", ".join(missing)
-    status_text = "Completed" if not missing else "Partial"
     participant = _subject_label(bundle.get("sub_id", "sub-unknown"))
     session = _session_plain(bundle.get("ses_id", "ses-unknown"))
     age_text = _format_number(metadata.get("age") if isinstance(metadata, dict) else None, 0)
@@ -317,16 +333,17 @@ def _render_overview(bundle: dict, metadata: dict) -> str:
     weight_text = _format_text(metadata.get("weight_kg") if isinstance(metadata, dict) else None)
     if weight_text != "—":
         weight_text += " kg"
+    scan_time_text = _format_scan_time(
+        metadata.get("recording_datetime") if isinstance(metadata, dict) else None
+    )
     grid = (
         '<div class="participant-grid">'
         f'<div><span>Participant</span><strong>{_escape(participant)}</strong></div>'
         f'<div><span>Session</span><strong>{_escape(session)}</strong></div>'
         f'<div><span>Age</span><strong>{_escape(age_text)} years</strong></div>'
-        '<div><span>Scan time</span><strong>—</strong></div>'
-        f'<div><span>Testing status</span><strong>{_escape(status_text)}</strong></div>'
+        f'<div><span>Scan time</span><strong>{_escape(scan_time_text)}</strong></div>'
         f'<div><span>Height</span><strong>{_escape(height_text)}</strong></div>'
         f'<div><span>Weight</span><strong>{_escape(weight_text)}</strong></div>'
-        f'<div><span>Missing tasks</span><strong>{_escape(missing_text)}</strong></div>'
         '</div>'
     )
     notices = [
@@ -335,8 +352,6 @@ def _render_overview(bundle: dict, metadata: dict) -> str:
             "This report summarizes research assessments and does not carry diagnostic or prescriptive authority. Measurements can vary with your physiological state on the day of testing.",
         )
     ]
-    if missing:
-        notices.append(_notice("Incomplete source data", f"The following task outputs are currently missing or incomplete: {missing_text}.", kind="info"))
     neuro_found = bool(isinstance(metadata, dict) and metadata.get("neuropsych", {}).get("found"))
     if not neuro_found:
         notices.append(_notice("Incomplete source data", "No neuropsychological assessment record was found for this subject in the source dataset.", kind="info"))
@@ -498,9 +513,15 @@ def _render_autonomic_overview(bundle: dict) -> str:
     body = (
         '<div class="chapter-banner"><div><span class="eyebrow" style="color:oklch(78% .08 245)">One coherent chapter</span><h3 style="margin:8px 0 0;font:650 28px var(--font-display)">Response to posture, strain, and breathing</h3><p>Review the trends first, then the calculated indices and participant-oriented explanation.</p></div><div class="chapter-tests"><div>01 · Supine-to-stand response</div><div>02 · Valsalva maneuver</div><div>03 · Deep breathing response</div></div></div>'
         '<div class="task-grid">'
-        '<div class="card task-card"><svg viewBox="0 0 180 118" role="img" aria-label="Person moving from lying on a bed to standing on the floor"><line class="axis" x1="8" y1="96" x2="172" y2="96"/><path class="task-stroke" d="M10 74h60v6H10zM14 80v10M66 80v10M10 74v-7h14"/><circle class="task-stroke" cx="20" cy="66" r="5"/><path class="task-stroke" d="M26 70h38"/><path class="task-secondary" d="M80 46c11-5 22-4 30 4m0 0-9-1m9 1-1 9"/><circle class="task-stroke" cx="140" cy="36" r="7"/><path class="task-stroke" d="M140 43v25m0-19-13 9m13-9 13 9m-13 10-9 19m9-19 9 19"/></svg><h3>Supine to stand</h3><p>Rest quietly while lying down, then stand when instructed while heart rate and blood pressure continue recording.</p></div>'
-        '<div class="card task-card"><svg viewBox="0 0 180 118" role="img" aria-label="Person blowing into a syringe"><path class="task-stroke" d="M46 20c-15 0-26 12-26 29 0 11 5 17 5 25 0 8-4 12-4 18 0 4 3 6 8 6h21"/><path class="task-stroke" d="M46 20c13 0 22 10 24 23 1 9-1 15-1 22"/><circle cx="55" cy="52" r="2.4" fill="var(--accent-deep)"/><path class="task-stroke" d="M42 40q7-4 13-1"/><path class="task-stroke" d="M63 67c-4 2-9 3-14 2"/><path class="task-secondary" d="M69 64q7-2 13 0"/><rect class="task-stroke" x="82" y="58" width="46" height="13" rx="1.5"/><path class="task-stroke" d="M94 58v13M106 58v13M118 58v13"/><path class="task-stroke" d="M128 61h9v7h-9M137 64.5h11M148 60v9"/></svg><h3>Valsalva maneuver</h3><p>Blow steadily into a syringe against resistance for the instructed interval, followed by recovery, while synchronized signals are recorded.</p></div>'
-        '<div class="card task-card"><svg viewBox="0 0 180 118" role="img" aria-label="Breathing cycle with an inhale circle and an exhale circle"><circle cx="52" cy="59" r="27" fill="none" stroke="var(--success)" stroke-width="5"/><path d="M52 32l6 6-6 6" fill="none" stroke="var(--success)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><text x="52" y="63" text-anchor="middle" fill="var(--success)" style="font:700 12px var(--font-mono)">inhale</text><circle cx="128" cy="59" r="27" fill="none" stroke="var(--danger)" stroke-width="5"/><path d="M128 86l-6-6 6-6" fill="none" stroke="var(--danger)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><text x="128" y="63" text-anchor="middle" fill="var(--danger)" style="font:700 12px var(--font-mono)">exhale</text></svg><h3>Deep breathing</h3><p>Follow paced inhale and exhale cues so breathing-linked changes in heart rate can be assessed.</p></div>'
+        '<div class="card task-card">'
+        + _task_illustration("supine_to_stand.png", "Person moving from lying on a bed to standing")
+        + '<div class="task-copy"><h3>Supine to stand</h3><p>Rest quietly while lying down, then stand when instructed while heart rate and blood pressure continue recording.</p></div></div>'
+        '<div class="card task-card">'
+        + _task_illustration("valsalva.png", "Seated person performing the Valsalva maneuver with a pressure gauge")
+        + '<div class="task-copy"><h3>Valsalva maneuver</h3><p>Blow steadily into a syringe against resistance for the instructed interval, followed by recovery, while synchronized signals are recorded.</p></div></div>'
+        '<div class="card task-card">'
+        + _task_illustration("deep_breathing.png", "Person following guided inhale and exhale breathing cues")
+        + '<div class="task-copy"><h3>Deep breathing</h3><p>Follow paced inhale and exhale cues so breathing-linked changes in heart rate can be assessed.</p></div></div>'
         '</div>'
     )
     return _page(
@@ -587,13 +608,16 @@ def _render_deep_breathing(bundle: dict) -> str:
     whole = bundle.get("whole", {})
     figures = bundle.get("figures", {})
     body = (
-        '<div class="grid grid-3">'
+        '<div class="grid grid-2">'
         + _metric_card("E:I ratio", whole.get("E_I_ratio"), "")
         + _metric_card("Delta HR", whole.get("delta_HR_responses"), "bpm")
-        + _metric_card("Cycle count", None, "", "Connect source dataset")
         + '</div>'
-        '<h3 class="section-heading">Breathing-linked heart-rate response</h3>'
-        + _figure_card("Heart rate waveform", "Source-derived figure", figures.get("DeepBreathing_plot"), "Deep breathing figure")
+        + '<div class="metric-figure-gap">'
+        + _figure_card(
+            "Deep breathing heart-rate response", "", figures.get("DeepBreathing_plot"),
+            "Deep breathing figure", show_header=False,
+        )
+        + '</div>'
         + _task_note(bundle, "breathing") +
         '<div class="disclosure"><button type="button">About E:I ratio +</button><div class="disclosure-content">The expiratory-to-inspiratory ratio compares the longest RR interval during expiration with the shortest RR interval during inspiration. It is interpreted in relation to age, test conditions, and other autonomic measures.</div></div>'
     )

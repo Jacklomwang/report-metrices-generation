@@ -17,6 +17,13 @@ PHENOTYPE_GROUP_INFO_LC_PATH = PHENOTYPE_BASE_PATH / 'Group_InfoSession_Data_LC.
 PHENOTYPE_TESTING_SCHEDULE_PATH = PHENOTYPE_BASE_PATH / 'Testing_Schedule_Sheet1.csv'
 PHENOTYPE_NOTES_SESSION_A_PATH = PHENOTYPE_BASE_PATH / 'LC_Experiments_Notes_v2_Session_A_Physio.csv'
 PHENOTYPE_NOTES_SESSION_B_PATH = PHENOTYPE_BASE_PATH / 'LC_Experiments_Notes_v2_Session_B_MRI.csv'
+PHENOTYPE_REDCAP_GLOB = 'InvestigationOfTheLo_DATA_*.csv'
+PHENOTYPE_REDCAP_DEFINITIONS_GLOB = 'REDCap_variables_definitions_*.xlsx'
+PHENOTYPE_GROUP_INFO_CC_GLOB = 'Group_InfoSession_Data_CC_*.csv'
+PHENOTYPE_GROUP_INFO_LC_GLOB = 'Group_InfoSession_Data_LC_*.csv'
+PHENOTYPE_TESTING_SCHEDULE_GLOB = 'Testing_Schedule_Sheet1_*.csv'
+PHENOTYPE_NOTES_SESSION_A_GLOB = 'LC_Experiments_Notes_v2_Session_A_Physio_*.csv'
+PHENOTYPE_NOTES_SESSION_B_GLOB = 'LC_Experiments_Notes_v2_Session_B_MRI_*.csv'
 # No stable-name symlink exists for this export (unlike the others above), so we glob
 # for the newest dated file each time instead of pointing at one fixed filename.
 PHENOTYPE_INTAKE_GLOB = 'IntakeForm_DATA_*.csv'
@@ -127,6 +134,20 @@ def _sanitize_bmi_value(value: Any) -> float | None:
     if parsed is None or parsed < 10 or parsed > 90:
         return None
     return round(parsed, 2)
+
+
+def _sanitize_height_m(value: Any) -> float | None:
+    parsed = _safe_float(value)
+    if parsed is None or parsed < 0.8 or parsed > 2.5:
+        return None
+    return parsed
+
+
+def _sanitize_weight_kg(value: Any) -> float | None:
+    parsed = _safe_float(value)
+    if parsed is None or parsed < 20 or parsed > 400:
+        return None
+    return parsed
 
 
 def _normalized_var_token(value: Any) -> str:
@@ -405,6 +426,8 @@ def _load_redcap_metadata(path: Path) -> dict[str, dict[str, Any]]:
         out[participant] = {
             'age': _coerce_scalar(_value(row, 'age')),
             'bmi': _first_value(row, ['sb_bmi', 'bmi', 'body_mass_index', 'bmi_calc']),
+            'height_m': _sanitize_height_m(_value(row, 'height_m')),
+            'weight_kg': _sanitize_weight_kg(_value(row, 'weight_kg')),
             'sex_asab': _coerce_scalar(_value(row, 'asab')),
             'gender': _coerce_scalar(_value(row, 'gender')),
             'recording_datetime': demographics_dt or consent_dt,
@@ -415,6 +438,14 @@ def _load_redcap_metadata(path: Path) -> dict[str, dict[str, Any]]:
 def _resolve_latest_intake_path(base_path: Path, pattern: str) -> Path | None:
     matches = sorted(base_path.glob(pattern))
     return matches[-1] if matches else None
+
+
+def _resolve_source_path(preferred_path: Path, dated_pattern: str) -> Path:
+    """Use a stable export name when present, otherwise the newest dated export."""
+    if preferred_path.exists():
+        return preferred_path
+    matches = sorted(preferred_path.parent.glob(dated_pattern))
+    return matches[-1] if matches else preferred_path
 
 
 def _load_intake_form(base_path: Path, pattern: str) -> dict[str, dict[str, Any]]:
@@ -682,20 +713,36 @@ def build_subject_metadata(participant: str, session: str, task: str) -> dict[st
     participant_id = normalize_participant_id(participant)
     session_class = infer_session_class(session)
 
+    redcap_path = _resolve_source_path(PHENOTYPE_REDCAP_PATH, PHENOTYPE_REDCAP_GLOB)
+    definitions_path = _resolve_source_path(
+        PHENOTYPE_REDCAP_DEFINITIONS_PATH, PHENOTYPE_REDCAP_DEFINITIONS_GLOB
+    )
+    group_cc_path = _resolve_source_path(PHENOTYPE_GROUP_INFO_CC_PATH, PHENOTYPE_GROUP_INFO_CC_GLOB)
+    group_lc_path = _resolve_source_path(PHENOTYPE_GROUP_INFO_LC_PATH, PHENOTYPE_GROUP_INFO_LC_GLOB)
+    schedule_path = _resolve_source_path(
+        PHENOTYPE_TESTING_SCHEDULE_PATH, PHENOTYPE_TESTING_SCHEDULE_GLOB
+    )
+    notes_a_path = _resolve_source_path(
+        PHENOTYPE_NOTES_SESSION_A_PATH, PHENOTYPE_NOTES_SESSION_A_GLOB
+    )
+    notes_b_path = _resolve_source_path(
+        PHENOTYPE_NOTES_SESSION_B_PATH, PHENOTYPE_NOTES_SESSION_B_GLOB
+    )
+
     redcap_definitions = {}
     definitions_load_error = None
     try:
-        redcap_definitions = _load_redcap_definitions_cached(str(PHENOTYPE_REDCAP_DEFINITIONS_PATH))
+        redcap_definitions = _load_redcap_definitions_cached(str(definitions_path))
     except Exception as exc:
         definitions_load_error = str(exc)
 
-    redcap_data = _load_redcap_metadata(PHENOTYPE_REDCAP_PATH)
-    group_cc = _load_group_info(PHENOTYPE_GROUP_INFO_CC_PATH)
-    group_lc = _load_group_info(PHENOTYPE_GROUP_INFO_LC_PATH)
+    redcap_data = _load_redcap_metadata(redcap_path)
+    group_cc = _load_group_info(group_cc_path)
+    group_lc = _load_group_info(group_lc_path)
     intake_data = _load_intake_form(PHENOTYPE_BASE_PATH, PHENOTYPE_INTAKE_GLOB)
-    schedule_data = _load_schedule_entries(PHENOTYPE_TESTING_SCHEDULE_PATH)
-    notes_a_data = _load_experiment_notes_entries(PHENOTYPE_NOTES_SESSION_A_PATH)
-    notes_b_data = _load_experiment_notes_entries(PHENOTYPE_NOTES_SESSION_B_PATH)
+    schedule_data = _load_schedule_entries(schedule_path)
+    notes_a_data = _load_experiment_notes_entries(notes_a_path)
+    notes_b_data = _load_experiment_notes_entries(notes_b_path)
 
     neuro_map: dict[str, dict[str, Any]] = {}
     neuro_map.update(group_cc)
@@ -731,12 +778,31 @@ def build_subject_metadata(participant: str, session: str, task: str) -> dict[st
         age_value = redcap_entry.get('age')
         age_source = 'redcap' if age_value is not None else None
 
+    height_m = _sanitize_height_m(intake_entry.get('height_m'))
+    height_source = 'intake_form' if height_m is not None else None
+    if height_m is None:
+        height_m = _sanitize_height_m(redcap_entry.get('height_m'))
+        height_source = 'redcap' if height_m is not None else None
+
+    weight_kg = _sanitize_weight_kg(intake_entry.get('weight_kg'))
+    weight_source = 'intake_form' if weight_kg is not None else None
+    if weight_kg is None:
+        weight_kg = _sanitize_weight_kg(redcap_entry.get('weight_kg'))
+        weight_source = 'redcap' if weight_kg is not None else None
+
     sex_asab_raw = redcap_entry.get('sex_asab')
     gender_raw = redcap_entry.get('gender')
     sex_asab_label = _interpret_redcap_value('asab', sex_asab_raw, redcap_definitions)
     gender_label = _interpret_redcap_value('gender', gender_raw, redcap_definitions)
 
     recording_date, recording_date_source = _resolve_recording_date(schedule_entry, notes_entry, redcap_entry)
+    recording_datetime = None
+    if schedule_entry and schedule_entry.get('datetime'):
+        recording_datetime = schedule_entry['datetime']
+    elif notes_entry and notes_entry.get('datetime'):
+        recording_datetime = notes_entry['datetime']
+    elif redcap_entry.get('recording_datetime'):
+        recording_datetime = redcap_entry['recording_datetime']
     ecg_configuration = _resolve_ecg_config(recording_date)
 
     researchers: list[str] = []
@@ -751,6 +817,7 @@ def build_subject_metadata(participant: str, session: str, task: str) -> dict[st
         'session_class': session_class,
         'task': task,
         'recording_date': recording_date.isoformat() if recording_date else None,
+        'recording_datetime': recording_datetime.isoformat(timespec='minutes') if recording_datetime else None,
         'recording_date_source': recording_date_source,
         'sex_asab': sex_asab_raw,
         'sex_asab_label': sex_asab_label,
@@ -758,6 +825,10 @@ def build_subject_metadata(participant: str, session: str, task: str) -> dict[st
         'gender_label': gender_label,
         'age': age_value,
         'age_source': age_source,
+        'height_cm': round(height_m * 100.0, 1) if height_m is not None else None,
+        'height_source': height_source,
+        'weight_kg': round(weight_kg, 1) if weight_kg is not None else None,
+        'weight_source': weight_source,
         'bmi': bmi_value,
         'bmi_source': bmi_source,
         'ecg_configuration': ecg_configuration,
@@ -773,6 +844,8 @@ def build_subject_metadata(participant: str, session: str, task: str) -> dict[st
             'session_notes_found': notes_entry is not None,
         },
         'definition_sources': {
-            'redcap_definitions_path': str(PHENOTYPE_REDCAP_DEFINITIONS_PATH),
+            'redcap_path': str(redcap_path),
+            'redcap_definitions_path': str(definitions_path),
+            'schedule_path': str(schedule_path),
         },
     }

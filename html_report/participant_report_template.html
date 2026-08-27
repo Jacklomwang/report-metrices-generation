@@ -76,7 +76,7 @@
     .metric-unit { margin-left: 3px; color: var(--muted); font-size: 12px; font-weight: 500; }
     .metric-note { margin-top: 9px; color: var(--muted); font-size: 11px; }
     .summary-panel { padding: 22px; background: var(--accent-soft); border-color: color-mix(in oklch, var(--accent) 35%, white); }
-    .participant-grid { display: grid; grid-template-columns: 1.4fr repeat(3, 1fr); gap: 1px; margin-top: 24px; background: var(--border); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .participant-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin-top: 24px; background: var(--border); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
     .participant-grid div { min-height: 76px; padding: 13px 15px; background: white; }
     .participant-grid span { display: block; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
     .participant-grid strong { display: block; margin-top: 6px; font: 650 17px var(--font-display); }
@@ -137,11 +137,11 @@
     .measure-list div { padding-top: 8px; border-top: 1px solid var(--border); }
     .measure-list span { display: block; color: var(--muted); font: 700 8px var(--font-mono); letter-spacing: .07em; text-transform: uppercase; }
     .measure-list strong { display: block; margin-top: 3px; font: 650 16px var(--font-display); }
-    .task-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 22px; }
-    .task-card { padding: 14px; }
-    .task-card svg { width: 100%; height: 118px; display: block; background: var(--bg); border-radius: 6px; }
-    .task-card h3 { margin: 11px 0 3px; font: 650 14px var(--font-display); }
-    .task-card p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
+    .task-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 22px; }
+    .task-card { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(0, 1.7fr); gap: 22px; align-items: center; padding: 14px; }
+    .task-illustration { width: 100%; height: 125px; display: block; object-fit: contain; background: white; border-radius: 6px; }
+    .task-card h3 { margin: 0 0 5px; font: 650 15px var(--font-display); }
+    .task-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
     .task-stroke { fill: none; stroke: var(--accent-deep); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
     .task-secondary { fill: none; stroke: var(--success); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
     .legend { display: flex; gap: 16px; margin: 8px 0 0; color: var(--muted); font-size: 9px; }
@@ -196,6 +196,7 @@
       .report-page { min-height: auto; margin-bottom: 20px; padding: 42px 22px 60px; }
       .page-header, .chapter-banner { grid-template-columns: 1fr; }
       .grid-2, .grid-3, .grid-4, .score-band, .participant-grid, .chapter-banner, .measure-groups, .task-grid { display: grid; grid-template-columns: 1fr; }
+      .task-card { grid-template-columns: 1fr; gap: 10px; }
       .cohort-intro { display: block; }
       .percentile-summary { margin-top: 12px; padding: 9px 0 0; border-top: 2px solid var(--accent); border-left: 0; }
       .distribution-grid { grid-template-columns: 1fr; }

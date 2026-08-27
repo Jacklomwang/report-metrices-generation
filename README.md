@@ -12,7 +12,7 @@ Current status:
 
 For one subject/session, the pipeline can generate:
 - `rest`: resting ECG/HRV and morphology, BP, respiratory, ETCO2, and Doppler metrics plus QC figures
-- `sts`: supine-to-stand heart-rate and blood-pressure metrics, onset marker, and an optional mean Doppler velocity panel that requires mean beat quality >= 0.8 in both supine and standing periods
+- `sts`: supine-to-stand metrics and onset marker; the MAP panel requires median MAP within 40-200 mmHg in both the supine and standing analysis windows, and the optional Doppler panel requires mean beat quality >= 0.8 in both periods
 - `valsalva`: Valsalva ratio from artifact-rejected median HR, synchronized HR/BP figure, and SBP/MAP phase summaries
 - `breathing`: deep-breathing metrics and a minute 7-8 HR figure
 - `spirometry`: FEV1 / FVC / PEF extracted metrics
@@ -64,10 +64,12 @@ Instead, this repo reads metadata directly from the shared phenotype/source file
 
 This is used to populate fields such as:
 - age
+- height and weight when present in the intake or REDCap exports
 - BMI
 - sex assigned at birth
 - gender
 - recording date
+- scheduled session date and time
 - researchers
 - neuropsych summary including `MoCA_Total`
 

@@ -98,10 +98,9 @@
     .interpretation { padding: 22px; }
     .interpretation h3 { margin: 0 0 10px; font: 650 18px var(--font-display); }
     .interpretation p { margin: 0; color: var(--muted); font-size: 13px; }
-    .disclosure { margin-top: 14px; border: 1px solid var(--border); border-radius: 8px; }
-    .disclosure button { width: 100%; padding: 13px 15px; border: 0; background: transparent; color: var(--accent-deep); text-align: left; font-weight: 650; }
-    .disclosure-content { display: none; padding: 0 15px 15px; color: var(--muted); font-size: 12px; }
-    .disclosure.open .disclosure-content { display: block; }
+    .information-section { margin-top: 14px; padding: 13px 15px; border: 1px solid var(--border); border-radius: 8px; }
+    .information-section h3 { margin: 0 0 6px; color: var(--accent-deep); font: 650 13px var(--font-display); }
+    .information-section p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
     .chart-card { padding: 18px; }
     .chart-card.no-header { padding: 0; overflow: hidden; }
     .chart-card.no-header .report-image { border: 0; border-radius: 7px; }
@@ -220,8 +219,6 @@
       }
       .report-page:last-child { page-break-after: auto; }
       .page-footer { inset: auto 17mm 8mm; }
-      .disclosure-content { display: block; }
-      .disclosure button { display: none; }
       .test-tabs { display: none; }
       .test-panel { display: block; margin-top: 12px; }
     }
@@ -234,13 +231,6 @@
     </main>
   </div>
   <script>
-    document.querySelectorAll(".disclosure button").forEach(button => {
-      button.addEventListener("click", () => {
-        const disclosure = button.closest(".disclosure");
-        disclosure.classList.toggle("open");
-        button.textContent = disclosure.classList.contains("open") ? button.textContent.replace(" +", " −") : button.textContent.replace(" −", " +");
-      });
-    });
     document.querySelectorAll(".test-tabs button").forEach(button => {
       button.addEventListener("click", () => {
         document.querySelectorAll(".test-tabs button").forEach(item => item.classList.toggle("active", item === button));

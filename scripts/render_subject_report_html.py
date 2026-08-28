@@ -160,7 +160,17 @@ def _chapter_row(number: str, title: str, subtitle: str, status: str, missing: b
     )
 
 
+def _information_section(title: str, text: str) -> str:
+    return (
+        '<div class="information-section">'
+        f'<h3>{_escape(title)}</h3>'
+        f'<p>{_escape(text)}</p>'
+        '</div>'
+    )
+
+
 def _page(section_id: str, eyebrow: str, title: str, page_number: str, lead: str, body_html: str, footer_left: str) -> str:
+    lead_html = f'<p class="page-lead">{_escape(lead)}</p>' if lead else ""
     return (
         f'<section class="report-page" id="{_escape(section_id)}">'
         '<header class="page-header">'
@@ -170,7 +180,7 @@ def _page(section_id: str, eyebrow: str, title: str, page_number: str, lead: str
         '</div>'
         f'<span class="page-number">{_escape(page_number)}</span>'
         '</header>'
-        f'<p class="page-lead">{_escape(lead)}</p>'
+        f'{lead_html}'
         f'{body_html}'
         f'<footer class="page-footer"><span>{_escape(footer_left)}</span><span>Research use only</span></footer>'
         '</section>'
@@ -369,9 +379,9 @@ def _render_overview(bundle: dict, metadata: dict) -> str:
     return _page(
         "overview",
         "Physiological & neuropsychological testing",
-        "Your study testing report",
+        "Physiological Testing Report",
         "01 / Overview",
-        "A participant-friendly summary of the research assessments completed during this session. Each test family has its own page so findings are easier to review and future sections can be added consistently.",
+        "",
         body,
         f"LC Study · {participant}",
     )
@@ -399,14 +409,17 @@ def _render_cognitive(bundle: dict, metadata: dict) -> str:
         '</div>'
         '</div>'
         '<h3 class="section-heading">Reaction indices <small>Awaiting values from source dataset</small></h3>'
-        '<div class="disclosure"><button type="button">About this assessment +</button><div class="disclosure-content">The MoCA is a screening assessment, not a diagnosis. Performance may be influenced by language, education, fatigue, hearing, vision, and the testing environment.</div></div>'
+        + _information_section(
+            "About this assessment",
+            "The MoCA is a screening assessment, not a diagnosis. Performance may be influenced by language, education, fatigue, hearing, vision, and the testing environment.",
+        )
     )
     return _page(
         "cognitive",
         "Section 01",
         "Cognitive testing",
         "02 / Cognitive",
-        "The Montreal Cognitive Assessment is a brief screening tool that samples several cognitive functions. The reaction-time placeholders are kept in the layout so we can connect them later without redesigning the report.",
+        "",
         body,
         "LC Study · Cognitive testing",
     )
@@ -434,15 +447,18 @@ def _render_spirometry(bundle: dict) -> str:
         '<p class="clinical-note">This is not clinical advice. If you have any questions or concerns regarding '
         'these results, please talk to a doctor.</p>'
         '</div>'
-        + _task_note(bundle, "spirometry") +
-        '<div class="disclosure"><button type="button">How to read spirometry values +</button><div class="disclosure-content">FEV1 is the forced expiratory volume in one second and FVC is the forced vital capacity, and FEV1/FVC is a ratio typically used for clinical diagnosis of obstructed lung disorders. Interpretation typically considers age, sex, height, reference equations, and test quality. These results should not be substituted for medical advice; please consult a doctor if you have any concerns.</div></div>'
+        + _task_note(bundle, "spirometry")
+        + _information_section(
+            "How to read spirometry values",
+            "FEV1 is the forced expiratory volume in one second and FVC is the forced vital capacity, and FEV1/FVC is a ratio typically used for clinical diagnosis of obstructed lung disorders. Interpretation typically considers age, sex, height, reference equations, and test quality. These results should not be substituted for medical advice; please consult a doctor if you have any concerns.",
+        )
     )
     return _page(
         "spirometry",
         "Section 02",
         "Spirometry",
         "03 / Respiratory",
-        "Spirometry measures how much air you can exhale and how quickly you can exhale it. Results are presented separately from cognitive testing for clearer review.",
+        "Spirometry measures how much air you can exhale and how quickly you can exhale it.",
         body,
         "LC Study · Spirometry",
     )
@@ -495,15 +511,18 @@ def _render_resting(bundle: dict) -> str:
         + _metric_card("QT time", whole.get("ecg_qt_time_ms"), "ms")
         + '</div>'
         + '</div>'
-        + _task_note(bundle, "rest") +
-        '<div class="disclosure"><button type="button">About HRV measures +</button><div class="disclosure-content">RMSSD is a time-domain heart-rate-variability measure associated primarily with parasympathetic activity. LF/HF is often reported as a frequency-domain index; interpretation remains context dependent.</div></div>'
+        + _task_note(bundle, "rest")
+        + _information_section(
+            "About HRV measures",
+            "RMSSD is a time-domain heart-rate-variability measure associated primarily with parasympathetic activity. LF/HF is often reported as a frequency-domain index; interpretation remains context dependent.",
+        )
     )
     return _page(
         "cardiovascular",
         "Section 03",
         "Cardiovascular Function At Rest",
         "04 / Resting state",
-        "Resting measurements are organized by recording modality, with Doppler summaries calculated after noisy-window exclusion.",
+        "",
         body,
         "LC Study · Resting cardiovascular",
     )
@@ -529,7 +548,7 @@ def _render_autonomic_overview(bundle: dict) -> str:
         "Section 04",
         "Autonomic testing",
         "05 / Chapter overview",
-        "The autonomic nervous system helps regulate involuntary functions such as heart rate and blood pressure. This chapter groups the three autonomic assessments while preserving a dedicated page for each.",
+        "The autonomic nervous system helps regulate involuntary functions such as heart rate and blood pressure.",
         body,
         "LC Study · Autonomic testing",
     )
@@ -551,8 +570,11 @@ def _render_sts(bundle: dict) -> str:
             "Supine-to-stand cardiovascular response figure", show_header=False,
         )
         + '</div>'
-        + _task_note(bundle, "sts") +
-        '<div class="disclosure"><button type="button">About orthostatic response +</button><div class="disclosure-content">Orthostatic intolerance describes symptoms that occur on standing and improve when lying down. Formal interpretation considers symptoms, timing, heart-rate change, blood-pressure change, medications, and clinical context.</div></div>'
+        + _task_note(bundle, "sts")
+        + _information_section(
+            "About orthostatic response",
+            "Orthostatic intolerance describes symptoms that occur on standing and improve when lying down. Formal interpretation considers symptoms, timing, heart-rate change, blood-pressure change, medications, and clinical context.",
+        )
     )
     return _page(
         "sts",
@@ -598,7 +620,7 @@ def _render_valsalva(bundle: dict) -> str:
         "Autonomic testing · 02",
         "Valsalva maneuver",
         "07 / Valsalva",
-        "The Valsalva maneuver records cardiovascular responses during a controlled strain and recovery. The figure below reflects the source-derived best repetition output when available.",
+        "The Valsalva maneuver records cardiovascular responses during a controlled strain and recovery.",
         body,
         "LC Study · Autonomic · Valsalva",
     )
@@ -618,8 +640,11 @@ def _render_deep_breathing(bundle: dict) -> str:
             "Deep breathing figure", show_header=False,
         )
         + '</div>'
-        + _task_note(bundle, "breathing") +
-        '<div class="disclosure"><button type="button">About E:I ratio +</button><div class="disclosure-content">The expiratory-to-inspiratory ratio compares the longest RR interval during expiration with the shortest RR interval during inspiration. It is interpreted in relation to age, test conditions, and other autonomic measures.</div></div>'
+        + _task_note(bundle, "breathing")
+        + _information_section(
+            "About E:I ratio",
+            "The expiratory-to-inspiratory ratio compares the longest RR interval during expiration with the shortest RR interval during inspiration. It is interpreted in relation to age, test conditions, and other autonomic measures.",
+        )
     )
     return _page(
         "deep-breathing",

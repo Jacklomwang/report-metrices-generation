@@ -176,7 +176,7 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
     base = out_root / f"sub-{sub}" / f"ses-{ses}"
     base.mkdir(parents=True, exist_ok=True)
 
-    tasks = ["rest", "sts", "valsalva", "breathing", "spirometry"]
+    tasks = ["rest", "sts", "valsalva", "breathing", "spirometry", "gas"]
 
     metrics_by_task = {}
     for task in tasks:
@@ -315,7 +315,7 @@ def main():
         "--skip",
         nargs="*",
         default=[],
-        choices=["rest", "sts", "valsalva", "breathing", "spirometry"],
+        choices=["rest", "sts", "valsalva", "breathing", "spirometry", "gas"],
         help="Tasks to skip",
     )
 
@@ -331,6 +331,9 @@ def main():
 
     ap.add_argument("--val_ecg_ch", type=int, default=4, help="Valsalva ECG channel (default 4)")
     ap.add_argument("--val_bp_ch", type=int, default=10, help="Valsalva BP fallback channel (default 10)")
+    ap.add_argument("--valsalva_rep", type=int, default=None,
+                    help="Force which Valsalva repetition to report (1-based). "
+                         "Default: auto-select the highest-ratio repetition.")
     ap.add_argument("--breath_ecg_ch", type=int, default=4, help="Breathing ECG channel (default 4)")
 
     ap.add_argument("--force_ppg", action="store_true", help="Force PPG for valsalva+breathing")
@@ -385,6 +388,8 @@ def main():
                 "--ecg_ch", str(args.val_ecg_ch),
                 "--bp_ch", str(args.val_bp_ch),
             ]
+            if args.valsalva_rep is not None:
+                cmd += ["--valsalva_rep", str(args.valsalva_rep)]
             if args.force_ppg:
                 cmd += ["--force_ppg", "--ppg_ch", str(args.ppg_ch)]
             if args.debug:
@@ -425,6 +430,18 @@ def main():
     else:
         print("[SKIP] spirometry")
 
+    # GAS MANIPULATION (CO2/O2 end-tidal, SpO2 pulse-ox, Doppler mean velocity)
+    if "gas" not in args.skip:
+        cmd = [
+            py, script_path("run_gas_acq.py"),
+            "--root", args.root, "--sub", args.sub, "--ses", args.ses,
+            *common,
+            "--save", "--out_root", args.out_root,
+        ]
+        run(cmd, allow_fail=True)
+    else:
+        print("[SKIP] gas")
+
     # Use the canonical merger so both transition MAT and active JSON bundles are written.
     run([
         py, script_path("merge_subject_all_metrics_only.py"),
@@ -435,6 +452,11 @@ def main():
     run([
         py, script_path("render_subject_report_html.py"),
         "--out_root", args.out_root, "--sub", args.sub, "--ses", args.ses,
+    ])
+    # also render the French version (…_report_fr.html)
+    run([
+        py, script_path("render_subject_report_html.py"),
+        "--out_root", args.out_root, "--sub", args.sub, "--ses", args.ses, "--lang", "fr",
     ])
 
     subject_out = out_root / f"sub-{args.sub}" / f"ses-{args.ses}"

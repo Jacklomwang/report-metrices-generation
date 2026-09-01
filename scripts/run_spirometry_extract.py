@@ -157,7 +157,20 @@ def main():
     sub_id = args.sub if args.sub.startswith("sub-") else f"sub-{args.sub}"
     ses_id = f"ses-{args.ses}"
 
-    csv_path = pick_latest_spiro_csv(spiro_dir)
+    # The device CSV (spiro_data_*.csv) is now legacy: spirometry is sourced
+    # authoritatively from FVC_results.csv by merge_subject_all_metrics_only.py
+    # (_load_spiro_from_csv). This device-CSV extraction only serves as a fallback
+    # for subjects absent from FVC_results.csv, so its absence must NOT crash the
+    # pipeline — write an explicit unavailable result and let the merger fill in.
+    try:
+        csv_path = pick_latest_spiro_csv(spiro_dir)
+    except FileNotFoundError as exc:
+        save_missing_spirometry_metrics(
+            out_root, sub_id, ses_id, spiro_dir,
+            f"Device spiro_data_*.csv not present ({exc}); spirometry is sourced from "
+            "FVC_results.csv by the merger.",
+        )
+        return
     print(f"[INFO] Using spirometry CSV: {csv_path}")
 
     # Read CSV with semicolon separator

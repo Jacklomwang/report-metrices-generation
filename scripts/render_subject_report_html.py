@@ -118,6 +118,7 @@ def _missing_tasks(bundle: dict) -> list[str]:
         "valsalva": "valsalva",
         "breathing": "breathing",
         "spirometry": "spirometry",
+        "gas": "gas",
     }
     return [label for key, label in labels.items() if not _task_present(bundle, key)]
 
@@ -373,6 +374,7 @@ def _render_overview(bundle: dict, metadata: dict) -> str:
         + _chapter_row("03", "Spirometry", "FVC, FEV1, ratio, and peak flow", "Separate page", missing=not _task_present(bundle, "spirometry"))
         + _chapter_row("04", "Resting cardiovascular", "Heart rate variability and blood pressure", "Figures added", missing=not _task_present(bundle, "rest"))
         + _chapter_row("05", "Autonomic testing", "Supine-to-stand, Valsalva, and deep breathing", "Grouped chapter", missing=not any(_task_present(bundle, k) for k in ["sts", "valsalva", "breathing"]))
+        + _chapter_row("06", "Gas manipulation", "CO₂/O₂ end-tidal, SpO₂, and Doppler velocity", "Separate page", missing=not _task_present(bundle, "gas"))
         + '</div>'
     )
     body = grid + ''.join(notices) + '<h3 class="section-heading">Report map</h3>' + report_map
@@ -387,28 +389,64 @@ def _render_overview(bundle: dict, metadata: dict) -> str:
     )
 
 
+# MoCA-Blind subscores: (source key, display label, max points). Sum of maxima = 22
+# (the eight sight-dependent points of the full /30 MoCA are not administered).
+MOCA_BLIND_SUBSCORES = [
+    ("MoCA_Digit_Span", "Digit span", 2),
+    ("MoCA_Letter_Tapping", "Vigilance", 1),
+    ("MoCA_Serial7s", "Serial 7s", 3),
+    ("MoCA_Language", "Sentence repetition", 2),
+    ("MoCA_Letter_fluency", "Verbal fluency", 1),
+    ("MoCA_Abstraction", "Abstraction", 2),
+    ("MoCA_Delayed_Recall", "Delayed recall", 5),
+    ("MoCA_Orientation", "Orientation", 6),
+]
+
+
 def _render_cognitive(bundle: dict, metadata: dict) -> str:
     neuro = metadata.get("neuropsych", {}) if isinstance(metadata, dict) else {}
     moca_total = neuro.get("MoCA_Total") if isinstance(neuro, dict) else None
+    subscores = neuro.get("MoCA_Subscores", {}) if isinstance(neuro, dict) else {}
     hero_value = _format_number(moca_total, 0)
-    note = "Most recent MoCA value available in the source metadata. A single score is one point-in-time research measurement."
+
+    context = "Raw MoCA-Blind screening score from the source dataset."
     if not neuro.get("found"):
-        note = "This subject has no neuropsychological assessment on record in the source dataset."
+        context = "This subject has no neuropsychological assessment on record in the source dataset."
     elif _is_missing(moca_total):
-        note = "A neuropsych record exists for this subject, but the MoCA total is not filled in yet."
+        context = "A neuropsych record exists for this subject, but the MoCA-Blind total is not filled in yet."
+
+    interpretation = (
+        "The MoCA-Blind is scored out of 22 (the eight sight-dependent points are not administered). "
+        "A raw MoCA-Blind score below 18/22 may be indicative of mild cognitive impairment. This is a "
+        "screening measure, not a diagnosis — a single score is one point-in-time research measurement, "
+        "and performance may be influenced by language, education, fatigue, hearing, and the testing "
+        "environment. A healthcare professional can provide appropriate follow-up interpretation."
+    )
+
+    sub_section = ""
+    if any(not _is_missing(subscores.get(key)) for key, _, _ in MOCA_BLIND_SUBSCORES):
+        sub_cards = "".join(
+            _metric_card(label, subscores.get(key), f"/{mx}", digits=0)
+            for key, label, mx in MOCA_BLIND_SUBSCORES
+        )
+        sub_section = (
+            '<h3 class="section-heading">MoCA-Blind subscores</h3>'
+            f'<div class="grid grid-4">{sub_cards}</div>'
+        )
+
     body = (
         '<div class="score-band">'
         '<div class="card hero-score"><div>'
-        f'<strong>{hero_value}<span class="metric-unit">/30</span></strong>'
-        '<span>MoCA total</span>'
+        f'<strong>{hero_value}<span class="metric-unit">/22</span></strong>'
+        '<span>MoCA-Blind total (raw)</span>'
         '</div></div>'
         '<div class="card interpretation">'
         '<span class="eyebrow">Participant context</span>'
-        f'<h3>{_escape(note)}</h3>'
-        '<p>A score is one point-in-time research measurement. A healthcare professional can provide appropriate follow-up interpretation if you have concerns.</p>'
+        f'<h3>{_escape(context)}</h3>'
+        f'<p>{_escape(interpretation)}</p>'
         '</div>'
         '</div>'
-        '<h3 class="section-heading">Reaction indices <small>Awaiting values from source dataset</small></h3>'
+        + sub_section
         + _information_section(
             "About this assessment",
             "The MoCA is a screening assessment, not a diagnosis. Performance may be influenced by language, education, fatigue, hearing, vision, and the testing environment.",
@@ -657,6 +695,42 @@ def _render_deep_breathing(bundle: dict) -> str:
     )
 
 
+def _render_gas(bundle: dict) -> str:
+    gas = _task_section(bundle, "gas")
+    figures = bundle.get("figures", {})
+    body = (
+        '<div class="grid grid-2">'
+        + _metric_card("Cerebrovascular reactivity", gas.get("cvr_pct_per_mmHg"), "%/mmHg",
+                       "Doppler velocity response to CO₂ during hypercapnia")
+        + _metric_card("Minimum SpO₂", gas.get("spo2_min_hypoxia_pct"), "%",
+                       "Lowest oxygen saturation during hypoxia")
+        + '</div>'
+        + '<div class="metric-figure-gap">'
+        + _figure_card(
+            "", "", figures.get("Gas_plot"), "Gas manipulation signals figure", show_header=False,
+        )
+        + '</div>'
+        + _information_section(
+            "About the gas-manipulation task",
+            "Inspired gas is manipulated to raise CO₂ (hypercapnia) and lower O₂ (hypoxia) while "
+            "cerebral blood-flow velocity is recorded by transcranial Doppler ultrasound and SpO₂, the "
+            "oxygen saturation, is measured from a pulse-oximeter placed on the finger. "
+            "End-tidal CO₂ (the red trace) and O₂ (the blue trace) approximate arterial gas tensions. "
+            "During hypercapnia, cerebral blood vessels dilate and cerebral blood-flow typically increases. "
+            "During hypoxia, oxygen saturation of the blood falls to around 86%.",
+        )
+    )
+    return _page(
+        "gas",
+        "Section 06",
+        "Gas manipulation",
+        "09 / Gas manipulation",
+        "",
+        body,
+        "LC Study · Gas manipulation",
+    )
+
+
 def _render_glossary(bundle: dict) -> str:
     body = (
         '<h3 class="section-heading">Glossary</h3>'
@@ -694,7 +768,7 @@ def _render_glossary(bundle: dict) -> str:
     )
 
 
-def build_report_html(bundle: dict, metadata: dict) -> str:
+def build_report_html(bundle: dict, metadata: dict, lang: str = "en") -> str:
     sub_id = bundle.get("sub_id", "sub-unknown")
     ses_id = bundle.get("ses_id", "ses-unknown")
     title = f"LC Study Participant Testing Report - {sub_id} {ses_id}"
@@ -712,14 +786,20 @@ def build_report_html(bundle: dict, metadata: dict) -> str:
         _render_sts(bundle),
         _render_valsalva(bundle),
         _render_deep_breathing(bundle),
+        _render_gas(bundle),
         _render_glossary(bundle),
     ])
 
-    return (
+    html = (
         template
         .replace("__REPORT_TITLE__", _escape(title))
         .replace("__REPORT_BODY__", body)
     )
+    if lang == "fr":
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import report_i18n
+        html = report_i18n.translate(html)
+    return html
 
 
 def main() -> int:
@@ -727,6 +807,8 @@ def main() -> int:
     ap.add_argument("--out_root", default="derived", help="Output root folder (e.g., derived)")
     ap.add_argument("--sub", required=True, help="Subject code like 2062")
     ap.add_argument("--ses", default="1", help="Session number like 1 or 2")
+    ap.add_argument("--lang", default="en", choices=["en", "fr"],
+                    help="Report language (fr writes a French _report_fr.html)")
     ap.add_argument("--quarto_bin", default="quarto", help="Deprecated compatibility argument; ignored.")
     args = ap.parse_args()
 
@@ -735,7 +817,8 @@ def main() -> int:
     ses_id = f"ses-{args.ses}"
     base_dir = out_root / sub_id / ses_id
     bundle_path = base_dir / f"{sub_id}_{ses_id}_all_metrics.json"
-    html_path = base_dir / f"{sub_id}_{ses_id}_report.html"
+    suffix = "_fr" if args.lang == "fr" else ""
+    html_path = base_dir / f"{sub_id}_{ses_id}_report{suffix}.html"
 
     if not bundle_path.exists():
         print(f"[ERROR] Missing merged JSON bundle: {bundle_path}")
@@ -743,7 +826,7 @@ def main() -> int:
 
     bundle = _load_bundle(bundle_path)
     metadata = _load_subject_metadata(sub_id, ses_id)
-    html_text = build_report_html(bundle, metadata)
+    html_text = build_report_html(bundle, metadata, lang=args.lang)
     html_path.write_text(html_text, encoding="utf-8")
     print(f"[OK] Saved HTML report: {html_path}")
     return 0

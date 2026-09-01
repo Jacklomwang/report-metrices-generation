@@ -191,7 +191,9 @@ def _load_spiro_from_csv(csv_path: Path, sub_id: str, ses: str | None = None) ->
     if "Subject_ID" not in df.columns:
         return {}
 
-    matches = df[df["Subject_ID"].astype(str).str.strip() == sub_id]
+    # Match case-insensitively: FVC_results.csv uses "Sub-1053" while callers pass
+    # "sub-1053", so a case-sensitive compare silently drops every subject.
+    matches = df[df["Subject_ID"].astype(str).str.strip().str.lower() == str(sub_id).strip().lower()]
     if matches.empty:
         return {}
 
@@ -283,7 +285,7 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
     if not base.exists():
         raise FileNotFoundError(f"Cannot find session folder: {base}")
 
-    tasks = ["rest", "sts", "valsalva", "breathing", "spirometry"]
+    tasks = ["rest", "sts", "valsalva", "breathing", "spirometry", "gas"]
 
     metrics_by_task = {}
     for task in tasks:
@@ -439,6 +441,7 @@ def merge_to_all_metrics(out_root: Path, sub: str, ses: str) -> Path:
             base / "breathing" / "breathing_hr_plot.png",
         ),
         "Spirometry_plot": _first_existing(base / "spirometry" / "spirometry_summary.png"),
+        "Gas_plot": _first_existing(base / "gas" / "gas_signals.png"),
     }
 
     out_mat = base / f"sub-{sub}_ses-{ses}_all_metrics.mat"

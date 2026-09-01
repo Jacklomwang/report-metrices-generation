@@ -433,6 +433,9 @@ def main():
     ap.add_argument("--ppg_ch", type=int, default=5, help="PPG channel number (default 5)")
     ap.add_argument("--force_ppg", action="store_true", help="Always use PPG for HR (ignore ECG)")
     ap.add_argument("--fallback_ppg", action="store_true", help="If ECG HR looks bad, fall back to PPG")
+    ap.add_argument("--valsalva_rep", type=int, default=None,
+                    help="Force which Valsalva repetition to report (1-based). "
+                         "Default: auto-select the repetition with the highest Valsalva ratio.")
 
     args = ap.parse_args()
 
@@ -619,10 +622,26 @@ def main():
         best_rep = -1
         valsalva_ratio = np.nan
 
+    # Optional override: force a specific repetition (1-based) instead of the
+    # auto best-ratio pick. Used e.g. when the first attempt was invalid/aborted.
+    rep_source = "auto_best_ratio"
+    if args.valsalva_rep is not None:
+        req = int(args.valsalva_rep)
+        if req < 1 or req > len(starts):
+            raise SystemExit(
+                f"--valsalva_rep {req} is out of range: only {len(starts)} "
+                f"repetition(s) were detected for this recording.")
+        best_rep = req - 1
+        valsalva_ratio = float(ratios[best_rep])
+        rep_source = "forced"
+        nan_note = "" if np.isfinite(valsalva_ratio) else " (ratio is NaN for this repetition)"
+        print(f"[INFO] Forcing Valsalva repetition {req} (1-based) via --valsalva_rep{nan_note}.")
+
     print("\n===== VALSALVA RESULTS =====")
     for i in range(len(ratios)):
         print(f"Rep {i+1}: HRmax={rep_hr_max[i]:.2f} HRmin={rep_hr_min[i]:.2f} ratio={ratios[i]:.3f}")
-    print(f"[RESULT] Valsalva ratio (max over reps) = {valsalva_ratio:.3f}  | best rep = {best_rep+1 if best_rep>=0 else 'NA'}")
+    _pick = "forced" if rep_source == "forced" else "max over reps"
+    print(f"[RESULT] Valsalva ratio ({_pick}) = {valsalva_ratio:.3f}  | selected rep = {best_rep+1 if best_rep>=0 else 'NA'}")
 
 
     fig_path = task_out / "valsalva_best_rep_hr_bp.png"
@@ -697,6 +716,8 @@ def main():
         "valsalva_ratio": float(valsalva_ratio),
         "ratios": ratios,
         "best_rep": int(best_rep + 1) if best_rep >= 0 else -1,
+        "rep_source": rep_source,
+        "valsalva_rep_requested": int(args.valsalva_rep) if args.valsalva_rep is not None else -1,
         "starts_s": starts_s,
         "rep_hr_max": rep_hr_max,
         "rep_hr_min": rep_hr_min,

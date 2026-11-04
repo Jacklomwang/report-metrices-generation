@@ -190,6 +190,22 @@ FR = {
     'Orthostatic intolerance describes symptoms that occur on standing and improve when lying down. Formal interpretation considers symptoms, timing, heart-rate change, blood-pressure change, medications, and clinical context.':
         'L’intolérance orthostatique désigne des symptômes qui surviennent au passage debout et s’améliorent en position allongée. Une interprétation formelle tient compte des symptômes, du délai, de la variation de la fréquence cardiaque et de la pression artérielle, des médicaments et du contexte clinique.',
 
+    'Orthostatic intolerance (OI) refers to a group of conditions characterized by symptoms like lightheadedness, palpitations, blurred vision, or fatigue that occur upon standing and are relieved by lying down, due to abnormal autonomic regulation of blood pressure or heart rate. One common form of OI is Postural Orthostatic Tachycardia Syndrome (POTS), defined by an excessive heart rate increase (≥30 bpm in adults, or ≥40 bpm in adolescents) within 10 minutes of standing or head-up tilt, without significant blood pressure drop [5]. The plateau-minus-baseline HR change displayed above is not the maximum standing HR rise and cannot establish POTS on its own.':
+        'L’intolérance orthostatique (IO) désigne un groupe d’affections caractérisées par des symptômes tels que des étourdissements, des palpitations, une vision trouble ou de la fatigue, qui surviennent en position debout et sont soulagés en position allongée, en raison d’une régulation autonome anormale de la pression artérielle ou de la fréquence cardiaque. Une forme courante d’IO est le syndrome de tachycardie orthostatique posturale (POTS), défini par une augmentation excessive de la fréquence cardiaque (≥30 bpm chez les adultes ou ≥40 bpm chez les adolescents) dans les 10 minutes suivant le passage debout ou une inclinaison tête haute, sans baisse significative de la pression artérielle [5]. La variation de FC entre le plateau et la valeur de base affichée ci-dessus ne représente pas la hausse maximale de FC debout et ne suffit pas à établir un diagnostic de POTS.',
+    'The Valsalva ratio quantifies vagal baroreflex function and is calculated as the ratio of the maximum heart rate during strain phase to the minimum heart rate during recovery phase; in healthy young adults, a Valsalva ratio ≥1.2 is typically considered normal, indicating intact cardiovagal modulation. Age and gender should also be considered when interpreting results, as normative values may vary accordingly (see Risk et al., 2001) [3][4].':
+        'Le rapport de Valsalva quantifie la fonction du baroréflexe vagal et correspond au rapport entre la fréquence cardiaque maximale pendant la phase d’effort et la fréquence cardiaque minimale pendant la récupération. Chez les jeunes adultes en bonne santé, un rapport de Valsalva ≥1,2 est généralement considéré comme normal, indiquant une modulation cardiovagale intacte. L’âge et le genre doivent également être pris en compte lors de l’interprétation des résultats, car les valeurs normatives peuvent varier en conséquence (voir Risk et al., 2001) [3][4].',
+    'The deep breathing test is a non-invasive autonomic function test used to assess parasympathetic (vagal) control of heart rate. The E:I ratio (Expiratory-to-Inspiratory ratio) is calculated as the ratio of the longest RR interval during expiration to the shortest RR interval during inspiration, averaged over multiple breathing cycles. It reflects the magnitude of respiratory sinus arrhythmia and is a marker of cardiovagal function. A normal E:I ratio is typically ≥1.2 in healthy young adults, though it may decline with age. Lower values can suggest impaired parasympathetic function or autonomic dysfunction [6].':
+        'Le test de respiration profonde est un test non invasif de la fonction autonome utilisé pour évaluer le contrôle parasympathique (vagal) de la fréquence cardiaque. Le rapport E:I (expiration/inspiration) est calculé comme le rapport entre le plus long intervalle RR pendant l’expiration et le plus court intervalle RR pendant l’inspiration, moyenné sur plusieurs cycles respiratoires. Il reflète l’amplitude de l’arythmie sinusale respiratoire et constitue un marqueur de la fonction cardiovagale. Un rapport E:I normal est généralement ≥1,2 chez les jeunes adultes en bonne santé, mais peut diminuer avec l’âge. Des valeurs plus faibles peuvent suggérer une altération de la fonction parasympathique ou une dysfonction autonome [6].',
+    'About the Valsalva ratio':
+        'À propos du rapport de Valsalva',
+
+    '&lt;1.2 may indicate reduced cardiovagal function in young adults [3][4].': '&lt;1,2 peut indiquer une fonction cardiovagale réduite chez les jeunes adultes [3][4].',
+    '&lt;1.2 may indicate reduced cardiovagal function in young adults; the reference decreases with age [6].': '&lt;1,2 peut indiquer une fonction cardiovagale réduite chez les jeunes adultes ; la référence diminue avec l’âge [6].',
+    'POTS HR criterion: ≥30 bpm (adults), ≥40 bpm (12–19 years) within 10 min [5]. See note below.': 'Critère de FC du POTS : ≥30 bpm (adultes), ≥40 bpm (12–19 ans) en 10 min [5]. Voir ci-dessous.',
+
+    '&gt;30 bpm: potential POTS criterion': '&gt;30 bpm : critère potentiel du POTS',
+    '&lt;1.2: potential reduced cardiovagal function': '&lt;1,2 : réduction potentielle de la fonction cardiovagale',
+
     # ---- valsalva -----------------------------------------------------------
     'Autonomic testing · 02': 'Tests autonomiques · 02',
     'Valsalva maneuver': 'Manœuvre de Valsalva',
@@ -270,5 +286,10 @@ FR = {
 def translate(html: str) -> str:
     """Rewrite participant-facing English text to French (longest keys first)."""
     for en, fr in sorted(FR.items(), key=lambda kv: -len(kv[0])):
+        emphasized_en, emphasized_fr = en, fr
+        for source, target in (("≥30 bpm", "≥30 bpm"), ("≥40 bpm", "≥40 bpm"), ("≥1.2", "≥1,2")):
+            emphasized_en = emphasized_en.replace(source, f"<strong>{source}</strong>")
+            emphasized_fr = emphasized_fr.replace(target, f"<strong>{target}</strong>")
+        html = html.replace(emphasized_en, emphasized_fr)
         html = html.replace(en, fr)
     return html

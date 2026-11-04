@@ -162,10 +162,13 @@ def _chapter_row(number: str, title: str, subtitle: str, status: str, missing: b
 
 
 def _information_section(title: str, text: str) -> str:
+    content = _escape(text)
+    for threshold in ("≥30 bpm", "≥40 bpm", "≥1.2"):
+        content = content.replace(threshold, f"<strong>{threshold}</strong>")
     return (
         '<div class="information-section">'
         f'<h3>{_escape(title)}</h3>'
-        f'<p>{_escape(text)}</p>'
+        f'<p>{content}</p>'
         '</div>'
     )
 
@@ -596,10 +599,8 @@ def _render_sts(bundle: dict) -> str:
     whole = bundle.get("whole", {})
     figures = bundle.get("figures", {})
     body = (
-        '<div class="grid grid-4">'
-        + _metric_card("Baseline HR", whole.get("baseline_HR"), "bpm")
-        + _metric_card("Plateau HR", whole.get("plateau_HR"), "bpm")
-        + _metric_card("Delta HR", whole.get("delta_HR"), "bpm", signed=True)
+        '<div class="grid grid-2">'
+        + _metric_card("Delta HR", whole.get("delta_HR"), "bpm", ">30 bpm: potential POTS criterion", signed=True)
         + _metric_card("Delta BP", whole.get("delta_BP"), "mmHg", signed=True)
         + '</div>'
         + '<div class="metric-figure-gap">'
@@ -611,7 +612,7 @@ def _render_sts(bundle: dict) -> str:
         + _task_note(bundle, "sts")
         + _information_section(
             "About orthostatic response",
-            "Orthostatic intolerance describes symptoms that occur on standing and improve when lying down. Formal interpretation considers symptoms, timing, heart-rate change, blood-pressure change, medications, and clinical context.",
+            "Orthostatic intolerance (OI) refers to a group of conditions characterized by symptoms like lightheadedness, palpitations, blurred vision, or fatigue that occur upon standing and are relieved by lying down, due to abnormal autonomic regulation of blood pressure or heart rate. One common form of OI is Postural Orthostatic Tachycardia Syndrome (POTS), defined by an excessive heart rate increase (≥30 bpm in adults, or ≥40 bpm in adolescents) within 10 minutes of standing or head-up tilt, without significant blood pressure drop [5]. The plateau-minus-baseline HR change displayed above is not the maximum standing HR rise and cannot establish POTS on its own.",
         )
     )
     return _page(
@@ -632,7 +633,7 @@ def _render_valsalva(bundle: dict) -> str:
         '<div class="grid grid-3">'
         + _metric_card(
             "Valsalva ratio", whole.get("Valsalva_ratio"), "",
-            "Calculated from artifact-rejected median HR",
+            "<1.2: potential reduced cardiovagal function",
         )
         + _metric_card(
             "Late Phase II MAP change", whole.get("map_phase2_late_recovery"), "mmHg",
@@ -652,6 +653,10 @@ def _render_valsalva(bundle: dict) -> str:
         )
         + '</div>'
         + _task_note(bundle, "valsalva")
+        + _information_section(
+            "About the Valsalva ratio",
+            'The Valsalva ratio quantifies vagal baroreflex function and is calculated as the ratio of the maximum heart rate during strain phase to the minimum heart rate during recovery phase; in healthy young adults, a Valsalva ratio ≥1.2 is typically considered normal, indicating intact cardiovagal modulation. Age and gender should also be considered when interpreting results, as normative values may vary accordingly (see Risk et al., 2001) [3][4].',
+        )
     )
     return _page(
         "valsalva",
@@ -669,7 +674,7 @@ def _render_deep_breathing(bundle: dict) -> str:
     figures = bundle.get("figures", {})
     body = (
         '<div class="grid grid-2">'
-        + _metric_card("E:I ratio", whole.get("E_I_ratio"), "")
+        + _metric_card("E:I ratio", whole.get("E_I_ratio"), "", "<1.2: potential reduced cardiovagal function")
         + _metric_card("Delta HR", whole.get("delta_HR_responses"), "bpm")
         + '</div>'
         + '<div class="metric-figure-gap">'
@@ -681,7 +686,7 @@ def _render_deep_breathing(bundle: dict) -> str:
         + _task_note(bundle, "breathing")
         + _information_section(
             "About E:I ratio",
-            "The expiratory-to-inspiratory ratio compares the longest RR interval during expiration with the shortest RR interval during inspiration. It is interpreted in relation to age, test conditions, and other autonomic measures.",
+            "The deep breathing test is a non-invasive autonomic function test used to assess parasympathetic (vagal) control of heart rate. The E:I ratio (Expiratory-to-Inspiratory ratio) is calculated as the ratio of the longest RR interval during expiration to the shortest RR interval during inspiration, averaged over multiple breathing cycles. It reflects the magnitude of respiratory sinus arrhythmia and is a marker of cardiovagal function. A normal E:I ratio is typically ≥1.2 in healthy young adults, though it may decline with age. Lower values can suggest impaired parasympathetic function or autonomic dysfunction [6].",
         )
     )
     return _page(
@@ -748,12 +753,12 @@ def _render_glossary(bundle: dict) -> str:
         '</div>'
         '<h3 class="section-heading">References</h3>'
         '<ol class="references">'
-        '<li>Nasreddine ZS, Phillips NA, Bédirian V, et al. The Montreal Cognitive Assessment, MoCA. J Am Geriatr Soc. 2005;53(4):695–699.</li>'
-        '<li>Shaffer F, Ginsberg JP. An overview of heart rate variability metrics and norms. Front Public Health. 2017;5:258.</li>'
-        '<li>Ewing DJ, Martyn CN, Young RJ, Clarke BF. The value of cardiovascular autonomic function tests. Diabetes Care. 1985;8(5):491–498.</li>'
-        '<li>Risk M, Bril V, Broadbridge C, Cohen A. Heart rate variability measurement in diabetic neuropathy. Diabetes Technol Ther. 2001;3(1):63–76.</li>'
-        '<li>Bryarly M, Phillips L, Fu Q, Vernino S, Levine BD. Postural orthostatic tachycardia syndrome. J Am Coll Cardiol. 2019;73(10):1207–1228.</li>'
-        '<li>Zygmunt A, Stanczyk J. Methods of evaluation of autonomic nervous system function. Arch Med Sci. 2010;6(1):11–18.</li>'
+        '<li>Nasreddine ZS, Phillips NA, Bédirian V, et al. The Montreal Cognitive Assessment, MoCA: a brief screening tool for mild cognitive impairment. J Am Geriatr Soc. 2005;53(4):695-699. doi:10.1111/j.1532-5415.2005.53221.x</li>'
+        '<li>Shaffer F, Ginsberg JP. An overview of heart rate variability metrics and norms. Front Public Health. 2017;5:258. doi:10.3389/fpubh.2017.00258</li>'
+        "<li>Ewing DJ, Martyn CN, Young RJ, Clarke BF. The value of cardiovascular autonomic function tests: 10 years' experience in diabetes. Diabetes Care. 1985;8(5):491-498. doi:10.2337/diacare.8.5.491</li>"
+        '<li>Risk M, Bril V, Broadbridge C, Cohen A. Heart rate variability measurement in diabetic neuropathy: review of methods. Diabetes Technol Ther. 2001;3(1):63-76. doi:10.1089/152091501300050231</li>'
+        '<li>Bryarly M, Phillips L, Fu Q, Vernino S, Levine BD. Postural orthostatic tachycardia syndrome: JACC Focus Seminar. J Am Coll Cardiol. 2019;73(10):1207-1228. doi:10.1016/j.jacc.2018.11.059</li>'
+        '<li>Zygmunt A, Stanczyk J. Methods of evaluation of autonomic nervous system function. Arch Med Sci. 2010;6(1):11-18. doi:10.5114/aoms.2010.13500</li>'
         '</ol>'
         + _notice("Reminder", "This research report is intended to share recorded study measurements with the participant. It is not a clinical diagnosis or treatment recommendation.")
     )

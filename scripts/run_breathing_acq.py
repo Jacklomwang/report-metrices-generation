@@ -163,6 +163,42 @@ def derive_hr_from_ppg(ppg: np.ndarray, fs: float):
 # ----------------------------
 # Plotting
 # ----------------------------
+# Reviewed session-specific windows; explicit CLI windows take precedence.
+BREATHING_WINDOWS_MIN = {("2064", "1"): (3.0, 4.0)}
+
+
+def resolve_breathing_window(sub: str, ses: str, start=None, end=None):
+    default_start, default_end = BREATHING_WINDOWS_MIN.get((sub, ses), (7.0, 8.0))
+    start = default_start if start is None else float(start)
+    end = default_end if end is None else float(end)
+    if not np.isfinite([start, end]).all() or start < 0 or end <= start:
+        raise ValueError("Breathing window must have finite times with 0 <= start < end.")
+    return start, end
+
+
+def exclude_high_peak_outlier(
+    hr: np.ndarray, selected_indices: np.ndarray, threshold_bpm: float = 25.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Exclude at most one high peak, compared with the mean of the other selected peaks.
+
+    Do not backfill from lower-ranked peaks or recursively reject further peaks.
+    With fewer than three selected peaks there is no reference group to compare.
+    """
+    selected = np.asarray(selected_indices, dtype=int)
+    rejected = np.array([], dtype=int)
+    if selected.size < 3:
+        return selected.copy(), rejected
+    values = np.asarray(hr, dtype=float)[selected]
+    if not np.isfinite(values).all():
+        return selected.copy(), rejected
+    highest = int(np.argmax(values))
+    other_mean = float(np.mean(np.delete(values, highest)))
+    if values[highest] - other_mean > threshold_bpm:
+        rejected = selected[[highest]]
+        return np.delete(selected, highest), rejected
+    return selected.copy(), rejected
+
+
 def save_breathing_hr_window_plot(
     out_png: Path,
     t_win: np.ndarray,
@@ -170,6 +206,7 @@ def save_breathing_hr_window_plot(
     peak_idx: np.ndarray,
     trough_idx: np.ndarray,
     title: str = "Deep Breathing Heart Rate Response",
+    excluded_peak_idx: np.ndarray | None = None,
 ):
     import os
     import matplotlib
@@ -184,16 +221,22 @@ def save_breathing_hr_window_plot(
 
     # Mark peaks/troughs
     if peak_idx.size:
-        ax.plot(t_win[peak_idx], hr_win[peak_idx], "r^", markersize=6, label="Max HR (top 5)")
+        ax.plot(t_win[peak_idx], hr_win[peak_idx], "r^", markersize=6, label=f"Max HR (used: {peak_idx.size})")
     if trough_idx.size:
-        ax.plot(t_win[trough_idx], hr_win[trough_idx], "gv", markersize=6, label="Min HR (bottom 5)")
+        ax.plot(t_win[trough_idx], hr_win[trough_idx], "gv", markersize=6, label=f"Min HR (used: {trough_idx.size})")
+
+    if excluded_peak_idx is not None and excluded_peak_idx.size:
+        ax.plot(
+            t_win[excluded_peak_idx], hr_win[excluded_peak_idx], "x",
+            color="#6B7280", alpha=0.65, markersize=8, label="Excluded high peak",
+        )
 
     ax.set_title(title, loc="left", pad=12)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Heart Rate (bpm)")
     ax.grid(False)
     ax.legend(
-        loc="lower right", bbox_to_anchor=(1.0, 1.01), ncol=2,
+        loc="lower right", bbox_to_anchor=(1.0, 1.01), ncol=3,
         frameon=False, borderaxespad=0.0,
     )
 
@@ -222,8 +265,8 @@ def main():
     ap.add_argument("--force_ppg", action="store_true", help="Always use PPG for HR (ignore ECG)")
     ap.add_argument("--fallback_ppg", action="store_true", help="If ECG HR looks bad, fall back to PPG")
 
-    ap.add_argument("--win_start_min", type=float, default=7.0, help="Primary window start (minutes), default 7")
-    ap.add_argument("--win_end_min", type=float, default=8.0, help="Primary window end (minutes), default 8")
+    ap.add_argument("--win_start_min", type=float, default=None, help="Window start in minutes; default 7, or 3 for sub-2064 ses-1")
+    ap.add_argument("--win_end_min", type=float, default=None, help="Window end in minutes; default 8, or 4 for sub-2064 ses-1")
     ap.add_argument("--top_k", type=int, default=5, help="Number of max/min points to use (default 5)")
 
     ap.add_argument(
@@ -243,6 +286,9 @@ def main():
     ap.add_argument("--out_root", default="derived", help="Root output folder under this project")
 
     args = ap.parse_args()
+    args.win_start_min, args.win_end_min = resolve_breathing_window(
+        args.sub, args.ses, args.win_start_min, args.win_end_min,
+    )
 
     root = Path(args.root)
     sub_id = f"sub-{args.sub}"
@@ -377,6 +423,18 @@ def main():
     else:
         tr_sel = np.array([], dtype=int)
 
+    pk_before_outlier_check = pk_sel.copy()
+    peak_outlier_threshold_bpm = 25.0
+    pk_sel, excluded_pk = exclude_high_peak_outlier(
+        hr_det, pk_sel, threshold_bpm=peak_outlier_threshold_bpm,
+    )
+    if excluded_pk.size:
+        print(
+            f"[INFO] Excluded high HR peak at {t_win[excluded_pk[0]]:.3f}s: "
+            f"{hr_det[excluded_pk[0]]:.3f} bpm vs other selected peaks' mean "
+            f"{np.mean(hr_det[pk_sel]):.3f} bpm (excess >25 bpm)."
+        )
+
     mean_max = float(np.nanmean(hr_det[pk_sel])) if pk_sel.size else np.nan
     mean_min = float(np.nanmean(hr_det[tr_sel])) if tr_sel.size else np.nan
 
@@ -401,6 +459,7 @@ def main():
             t_win=t_win,
             hr_win=hr_det,          # plot the same curve used for selection
             peak_idx=pk_sel,
+            excluded_peak_idx=excluded_pk,
             trough_idx=tr_sel,
             title="Deep Breathing Heart Rate Response",
         )
@@ -420,6 +479,14 @@ def main():
         "win_end_s": float(win_end),
         "win_label": str(win_label),
         "top_k": int(k),
+        "peak_outlier_threshold_bpm": peak_outlier_threshold_bpm,
+        "peak_idx_before_outlier_check": pk_before_outlier_check.astype(np.int32),
+        "peak_hr_before_filter_bpm": hr_det[pk_before_outlier_check],
+        "excluded_peak_idx_win": excluded_pk.astype(np.int32),
+        "excluded_peak_times_s": t_win[excluded_pk],
+        "excluded_peak_hr_bpm": hr_det[excluded_pk],
+        "selected_peak_hr_bpm": hr_det[pk_sel],
+        "selected_peak_count": int(pk_sel.size),
 
         "mean_max_hr_bpm": mean_max,
         "mean_min_hr_bpm": mean_min,

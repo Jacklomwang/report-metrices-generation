@@ -86,6 +86,23 @@ python -m pip install -r requirements.txt
 
 If you already have a working environment from `physio-qc`, you can also use that interpreter directly.
 
+## Breathing peak outlier exclusion
+
+Reviewed window selection: **sub-2064, ses-1 uses minutes 3-4**;
+**sub-2019, ses-1 uses minutes 7-8**. Other subject/sessions default to minutes
+7-8. These choices apply automatically in the full pipeline. Explicit
+`--win_start_min` and `--win_end_min` on `run_breathing_acq.py` override them.
+All windows use the high-peak exclusion below.
+
+The breathing task selects the top five HR maxima in the analysis window
+(default minutes 7-8). If the highest selected maximum exceeds the mean of the
+other four by **more than 25 bpm**, it is excluded from mean maximum HR, delta HR,
+and the reported E:I ratio. The remaining four are used without replacement.
+Only one high peak can be excluded; trough selection is unchanged. For custom
+`--top_k` values, the same comparison uses the other selected maxima and requires
+at least three selected peaks. The plot marks excluded peaks with a gray cross,
+and the metrics bundle records their times, values, and selection counts.
+
 ## Main workflow
 
 Run the complete pipeline for one subject/session with one command:

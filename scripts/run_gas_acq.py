@@ -188,27 +188,40 @@ def main() -> int:
         return float(np.nanmedian(x[mm])) if mm.any() else float("nan")
 
     # Cerebrovascular reactivity (CVR): %ΔCBF-velocity per mmHg ΔET-CO2 during the
-    # hypercapnia block (steady-state plateau vs pre-block baseline).
-    cvr = float("nan")
+    # hypercapnia block (steady-state plateau vs pre-block baseline). Keep EVERY term
+    # (baseline/peak ET-CO2 + ΔET-CO2, baseline/peak MV + %ΔMV) so the report can show
+    # the values that go into the CVR equation.
+    etco2_hc_base = etco2_hc_peak = delta_etco2 = float("nan")
+    mv_hc_base = mv_hc_peak = pct_delta_mv = cvr = float("nan")
     hc = [ev for ev in gas_events if ev[2] == "Hypercapnia"]
-    if hc and co2 is not None and dop is not None:
+    if hc:
         on, dur = acq_start + hc[0][0], hc[0][1]
-        etco2_b = _win_median(co2_env, t, max(0.0, on - 40), on - 5)
-        etco2_h = _win_median(co2_env, t, on + dur - 45, on + dur - 5)
-        mv_b = _win_median(dop_mv, dop_mv_t, max(0.0, on - 40), on - 5)
-        mv_h = _win_median(dop_mv, dop_mv_t, on + dur - 45, on + dur - 5)
-        dco2 = etco2_h - etco2_b
-        if np.isfinite(dco2) and abs(dco2) > 1.0 and np.isfinite(mv_b) and mv_b > 0:
-            cvr = ((mv_h - mv_b) / mv_b * 100.0) / dco2   # %/mmHg
+        if co2 is not None:
+            etco2_hc_base = _win_median(co2_env, t, max(0.0, on - 40), on - 5)
+            etco2_hc_peak = _win_median(co2_env, t, on + dur - 45, on + dur - 5)
+            delta_etco2 = etco2_hc_peak - etco2_hc_base
+        if dop is not None:
+            mv_hc_base = _win_median(dop_mv, dop_mv_t, max(0.0, on - 40), on - 5)
+            mv_hc_peak = _win_median(dop_mv, dop_mv_t, on + dur - 45, on + dur - 5)
+            if np.isfinite(mv_hc_base) and mv_hc_base > 0:
+                pct_delta_mv = (mv_hc_peak - mv_hc_base) / mv_hc_base * 100.0
+        if np.isfinite(delta_etco2) and abs(delta_etco2) > 1.0 and np.isfinite(pct_delta_mv):
+            cvr = pct_delta_mv / delta_etco2   # %/mmHg
 
-    # Minimum SpO2 during hypoxia (nadir often lags the block, so include ~90 s after).
-    spo2_min_hypoxia = float("nan")
+    # Hypoxia: end-tidal O2 baseline -> trough (block steady-state plateau) + ΔET-O2,
+    # and the minimum SpO2 (nadir lags the block, so include ~90 s after it).
+    eto2_hx_base = eto2_hx_trough = delta_eto2 = spo2_min_hypoxia = float("nan")
     hx = [ev for ev in gas_events if ev[2] == "Hypoxia"]
-    if hx and sat is not None:
+    if hx:
         on, dur = acq_start + hx[0][0], hx[0][1]
-        mm = np.isfinite(spo2_c) & (t >= on) & (t <= on + dur + 90)
-        if mm.any():
-            spo2_min_hypoxia = float(np.nanmin(spo2_c[mm]))
+        if o2 is not None:
+            eto2_hx_base = _win_median(o2_env, t, max(0.0, on - 40), on - 5)
+            eto2_hx_trough = _win_median(o2_env, t, on + dur - 45, on + dur - 5)
+            delta_eto2 = eto2_hx_trough - eto2_hx_base
+        if sat is not None:
+            mm = np.isfinite(spo2_c) & (t >= on) & (t <= on + dur + 90)
+            if mm.any():
+                spo2_min_hypoxia = float(np.nanmin(spo2_c[mm]))
 
     metrics = {
         "present": 1,
@@ -222,7 +235,18 @@ def main() -> int:
         "spo2_min_pct": float(np.nanmin(spo2_c)),
         "doppler_mv_baseline_cms": _baseline(dop_mv, dop_mv_t),
         "doppler_mv_max_cms": float(np.nanmax(dop_mv)),
+        # --- hypercapnia: CVR equation inputs ---
+        "etco2_hc_baseline_mmHg": etco2_hc_base,
+        "etco2_hc_peak_mmHg": etco2_hc_peak,
+        "delta_etco2_mmHg": delta_etco2,
+        "mv_hc_baseline_cms": mv_hc_base,
+        "mv_hc_peak_cms": mv_hc_peak,
+        "pct_delta_mv": pct_delta_mv,
         "cvr_pct_per_mmHg": cvr,
+        # --- hypoxia: ET-O2 trough + delta, min SpO2 ---
+        "eto2_hx_baseline_mmHg": eto2_hx_base,
+        "eto2_hx_trough_mmHg": eto2_hx_trough,
+        "delta_eto2_mmHg": delta_eto2,
         "spo2_min_hypoxia_pct": spo2_min_hypoxia,
         "gas_variant": variant,
         "gas_variant_source": variant_source,

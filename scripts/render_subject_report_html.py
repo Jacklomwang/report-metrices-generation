@@ -703,12 +703,27 @@ def _render_deep_breathing(bundle: dict) -> str:
 def _render_gas(bundle: dict) -> str:
     gas = _task_section(bundle, "gas")
     figures = bundle.get("figures", {})
+    n = _format_number
+    hc_co2_note = f"baseline {n(gas.get('etco2_hc_baseline_mmHg'), 1)} → peak {n(gas.get('etco2_hc_peak_mmHg'), 1)} mmHg"
+    hc_mv_note = f"baseline {n(gas.get('mv_hc_baseline_cms'), 1)} → {n(gas.get('mv_hc_peak_cms'), 1)} cm/s"
+    hx_o2_note = f"baseline {n(gas.get('eto2_hx_baseline_mmHg'), 1)} → trough {n(gas.get('eto2_hx_trough_mmHg'), 1)} mmHg"
+    cvr_eq = (f"CVR = ΔDoppler velocity ÷ ΔET-CO₂ = {n(gas.get('pct_delta_mv'), 1, signed=True)}%"
+              f" ÷ {n(gas.get('delta_etco2_mmHg'), 1, signed=True)} mmHg"
+              f" = {n(gas.get('cvr_pct_per_mmHg'), 2)} %/mmHg")
     body = (
-        '<div class="grid grid-2">'
+        '<h3 class="section-heading">Hypercapnia · CO₂ challenge</h3>'
+        '<div class="grid grid-3">'
+        + _metric_card("Δ End-tidal CO₂", gas.get("delta_etco2_mmHg"), "mmHg", hc_co2_note, digits=1, signed=True)
+        + _metric_card("Δ Doppler velocity", gas.get("pct_delta_mv"), "%", hc_mv_note, digits=1, signed=True)
         + _metric_card("Cerebrovascular reactivity", gas.get("cvr_pct_per_mmHg"), "%/mmHg",
-                       "Doppler velocity response to CO₂ during hypercapnia")
+                       "ΔDoppler velocity ÷ ΔET-CO₂", digits=2)
+        + '</div>'
+        + f'<p class="clinical-note">{_escape(cvr_eq)}</p>'
+        + '<h3 class="section-heading">Hypoxia · O₂ challenge</h3>'
+        '<div class="grid grid-2">'
+        + _metric_card("Δ End-tidal O₂", gas.get("delta_eto2_mmHg"), "mmHg", hx_o2_note, digits=1, signed=True)
         + _metric_card("Minimum SpO₂", gas.get("spo2_min_hypoxia_pct"), "%",
-                       "Lowest oxygen saturation during hypoxia")
+                       "Lowest saturation during hypoxia", digits=1)
         + '</div>'
         + '<div class="metric-figure-gap">'
         + _figure_card(

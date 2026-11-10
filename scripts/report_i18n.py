@@ -239,6 +239,16 @@ FR = {
     'Doppler velocity response to CO₂ during hypercapnia': 'Réponse de la vélocité Doppler au CO₂ pendant l’hypercapnie',
     '<span class="metric-label">Minimum SpO₂</span>': '<span class="metric-label">SpO₂ minimale</span>',
     'Lowest oxygen saturation during hypoxia': 'Saturation en oxygène la plus basse pendant l’hypoxie',
+    'Lowest saturation during hypoxia': 'Saturation la plus basse pendant l’hypoxie',
+    '<h3 class="section-heading">Hypercapnia · CO₂ challenge</h3>': '<h3 class="section-heading">Hypercapnie · défi CO₂</h3>',
+    '<h3 class="section-heading">Hypoxia · O₂ challenge</h3>': '<h3 class="section-heading">Hypoxie · défi O₂</h3>',
+    '<span class="metric-label">Δ End-tidal CO₂</span>': '<span class="metric-label">Δ CO₂ télé-expiratoire</span>',
+    '<span class="metric-label">Δ Doppler velocity</span>': '<span class="metric-label">Δ vélocité Doppler</span>',
+    '<span class="metric-label">Δ End-tidal O₂</span>': '<span class="metric-label">Δ O₂ télé-expiratoire</span>',
+    'ΔDoppler velocity ÷ ΔET-CO₂': 'Δvélocité Doppler ÷ ΔCO₂-TE',
+    ' → peak ': ' → pic ',
+    ' → trough ': ' → creux ',
+    'baseline ': 'référence ',
     'About the gas-manipulation task': 'À propos de la tâche de manipulation des gaz',
     'Inspired gas is manipulated to raise CO₂ (hypercapnia) and lower O₂ (hypoxia) while '
     'cerebral blood-flow velocity is recorded by transcranial Doppler ultrasound and SpO₂, the '

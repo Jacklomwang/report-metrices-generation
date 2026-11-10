@@ -64,7 +64,7 @@ Instead, this repo reads metadata directly from the shared phenotype/source file
 
 This is used to populate fields such as:
 - age
-- height and weight when present in the intake or REDCap exports
+- height and weight — IntakeForm first, then the Group_InfoSession sheets (`HEIGHT_M`/`WEIGHT_KG` rows; an unconverted-cm height entry is recovered as cm→m), then REDCap (whose `height_m`/`weight_kg` columns are currently empty in every export row)
 - BMI
 - sex assigned at birth
 - gender

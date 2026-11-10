@@ -175,6 +175,34 @@ def _resolve_bmi_from_group_entry(entry: dict[str, Any] | None) -> float | None:
     return None
 
 
+def _resolve_height_m_from_group_entry(entry: dict[str, Any] | None) -> tuple[float | None, str | None]:
+    """Height from a Group_InfoSession row. The sheet's HEIGHT_M row occasionally
+    holds an unconverted centimetre entry (e.g. 168.00), which we recover; an
+    ambiguous feet entry (e.g. 5.70 = 5'7" or 5.7 ft) is left as missing."""
+    if not entry:
+        return None, None
+    for key, value in entry.items():
+        if _normalized_var_token(key) in {'heightm', 'height'}:
+            parsed = _sanitize_height_m(value)
+            if parsed is not None:
+                return parsed, None
+            raw = _safe_float(value)
+            if raw is not None and 80 <= raw <= 250:
+                return _sanitize_height_m(raw / 100.0), 'cm→m'
+    return None, None
+
+
+def _resolve_weight_kg_from_group_entry(entry: dict[str, Any] | None) -> float | None:
+    if not entry:
+        return None
+    for key, value in entry.items():
+        if _normalized_var_token(key) in {'weightkg', 'weight'}:
+            parsed = _sanitize_weight_kg(value)
+            if parsed is not None:
+                return parsed
+    return None
+
+
 def _clean_note(value: Any) -> str | None:
     if value is None:
         return None
@@ -778,8 +806,20 @@ def build_subject_metadata(participant: str, session: str, task: str) -> dict[st
         age_value = redcap_entry.get('age')
         age_source = 'redcap' if age_value is not None else None
 
+    # Same source precedence as BMI above: IntakeForm, then the Group_InfoSession
+    # sheets (the in-person measurements), then REDCap. The REDCap main export's
+    # height_m/weight_kg columns are currently empty for every row (the fields
+    # moved to the IntakeForm project), so group info is the effective fallback.
     height_m = _sanitize_height_m(intake_entry.get('height_m'))
     height_source = 'intake_form' if height_m is not None else None
+    if height_m is None:
+        height_m, unit_note = _resolve_height_m_from_group_entry(group_cc_entry)
+        if height_m is not None:
+            height_source = 'group_info_cc' + (f' ({unit_note})' if unit_note else '')
+    if height_m is None:
+        height_m, unit_note = _resolve_height_m_from_group_entry(group_lc_entry)
+        if height_m is not None:
+            height_source = 'group_info_lc' + (f' ({unit_note})' if unit_note else '')
     if height_m is None:
         height_m = _sanitize_height_m(redcap_entry.get('height_m'))
         height_source = 'redcap' if height_m is not None else None
@@ -787,8 +827,20 @@ def build_subject_metadata(participant: str, session: str, task: str) -> dict[st
     weight_kg = _sanitize_weight_kg(intake_entry.get('weight_kg'))
     weight_source = 'intake_form' if weight_kg is not None else None
     if weight_kg is None:
+        weight_kg = _resolve_weight_kg_from_group_entry(group_cc_entry)
+        weight_source = 'group_info_cc' if weight_kg is not None else None
+    if weight_kg is None:
+        weight_kg = _resolve_weight_kg_from_group_entry(group_lc_entry)
+        weight_source = 'group_info_lc' if weight_kg is not None else None
+    if weight_kg is None:
         weight_kg = _sanitize_weight_kg(redcap_entry.get('weight_kg'))
         weight_source = 'redcap' if weight_kg is not None else None
+
+    # Last-resort BMI from the resolved height/weight (covers subjects whose sheet
+    # BMI formula was poisoned by an unconverted-cm height entry).
+    if bmi_value is None and height_m is not None and weight_kg is not None:
+        bmi_value = _sanitize_bmi_value(weight_kg / (height_m * height_m))
+        bmi_source = 'computed_from_height_weight' if bmi_value is not None else None
 
     sex_asab_raw = redcap_entry.get('sex_asab')
     gender_raw = redcap_entry.get('gender')
